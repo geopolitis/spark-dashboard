@@ -738,15 +738,18 @@ INDEX_HTML = r"""<!doctype html>
     </section>
   </main>
   <script>
-    const fmt = (v, d=1) => v === null || v === undefined || Number.isNaN(v) ? "n/a" : Number(v).toFixed(d);
-    const ms = v => v === null || v === undefined || Number.isNaN(v) ? "n/a" : `${(Number(v) * 1000).toFixed(0)} ms`;
-    const pct = v => v === null || v === undefined ? "n/a" : `${(v * 100).toFixed(1)}%`;
+    const fmt = (v, d=1) => {
+      if (v === null || v === undefined || Number.isNaN(Number(v))) return "n/a";
+      return new Intl.NumberFormat(undefined, {minimumFractionDigits: d, maximumFractionDigits: d}).format(Number(v));
+    };
+    const ms = v => v === null || v === undefined || Number.isNaN(Number(v)) ? "n/a" : `${fmt(Number(v) * 1000, 0)} ms`;
+    const pct = v => v === null || v === undefined || Number.isNaN(Number(v)) ? "n/a" : `${fmt(Number(v) * 100, 1)}%`;
     const bytes = v => {
       if (v === null || v === undefined || Number.isNaN(v)) return "n/a";
       const units = ["B","KB","MB","GB","TB"];
       let n = Number(v), i = 0;
       while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
-      return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
+      return `${fmt(n, i ? 1 : 0)} ${units[i]}`;
     };
     function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
     function tip(s) { return ` title="${esc(s)}"`; }
