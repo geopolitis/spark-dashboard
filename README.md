@@ -26,7 +26,7 @@ Common overrides:
 ```bash
 REMOTE_NODE_HOST=remote-host
 REMOTE_NODE_SSH=remote-host
-REMOTE_NODE_LABEL=Remote node
+REMOTE_NODE_LABEL="Remote node"
 ```
 
 Useful optional overrides:
@@ -36,7 +36,7 @@ SPARK_DASHBOARD_PORT=8090
 SPARK_DASHBOARD_INTERVAL=15
 SPARK_DASHBOARD_HISTORY=21600
 
-LOCAL_NODE_LABEL=Local node
+LOCAL_NODE_LABEL="Local node"
 LOCAL_VLLM_URL=http://127.0.0.1:8080
 LOCAL_PROXY_URL=http://127.0.0.1:8081
 
