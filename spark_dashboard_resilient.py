@@ -279,6 +279,7 @@ def parse_vllm_metrics(text):
     request_abort = parse_sum(text, r'^vllm:request_success_total\{[^}]*finished_reason="abort"[^}]*\}\s+([0-9.eE+-]+)') or 0.0
     request_repetition = parse_sum(text, r'^vllm:request_success_total\{[^}]*finished_reason="repetition"[^}]*\}\s+([0-9.eE+-]+)') or 0.0
     ttft = parse_histogram(text, "vllm:time_to_first_token_seconds")
+    request_prompt_tokens = parse_histogram(text, "vllm:request_prompt_tokens")
     acceptance = None
     if draft and draft > 0 and accepted is not None:
         acceptance = accepted / draft
@@ -315,6 +316,10 @@ def parse_vllm_metrics(text):
         "ttft_avg_s": (ttft.get("sum") / ttft.get("count")) if ttft and ttft.get("sum") is not None and ttft.get("count") else None,
         "ttft_p50_s": histogram_quantile(ttft, 0.50),
         "ttft_p95_s": histogram_quantile(ttft, 0.95),
+        "request_prompt_count": request_prompt_tokens.get("count") if request_prompt_tokens else None,
+        "request_prompt_avg_tokens": (request_prompt_tokens.get("sum") / request_prompt_tokens.get("count")) if request_prompt_tokens and request_prompt_tokens.get("sum") is not None and request_prompt_tokens.get("count") else None,
+        "request_prompt_p50_tokens": histogram_quantile(request_prompt_tokens, 0.50),
+        "request_prompt_p95_tokens": histogram_quantile(request_prompt_tokens, 0.95),
     }
 
 
@@ -609,8 +614,16 @@ def derive_sample(nodes, previous):
         ttft_sum = 0.0
         ttft_p50 = None
         ttft_p95 = None
+        prompt_count = 0.0
+        prompt_sum = 0.0
+        prompt_p50 = None
+        prompt_p95 = None
+        max_model_len = None
         for item in node.get("vllm", []):
             metrics = item.get("metrics") or {}
+            for model in item.get("models") or []:
+                if model.get("max_model_len"):
+                    max_model_len = max(max_model_len or 0.0, float(model["max_model_len"]))
             generation += metrics.get("generation_tokens") or 0.0
             prompt += metrics.get("prompt_tokens") or 0.0
             request_success += metrics.get("request_success") or 0.0
@@ -643,6 +656,13 @@ def derive_sample(nodes, previous):
                 ttft_p50 = max(ttft_p50 or 0.0, metrics["ttft_p50_s"])
             if metrics.get("ttft_p95_s") is not None:
                 ttft_p95 = max(ttft_p95 or 0.0, metrics["ttft_p95_s"])
+            if metrics.get("request_prompt_count") and metrics.get("request_prompt_avg_tokens") is not None:
+                prompt_count += metrics["request_prompt_count"]
+                prompt_sum += metrics["request_prompt_count"] * metrics["request_prompt_avg_tokens"]
+            if metrics.get("request_prompt_p50_tokens") is not None:
+                prompt_p50 = max(prompt_p50 or 0.0, metrics["request_prompt_p50_tokens"])
+            if metrics.get("request_prompt_p95_tokens") is not None:
+                prompt_p95 = max(prompt_p95 or 0.0, metrics["request_prompt_p95_tokens"])
         for item in node.get("proxy", []):
             metrics = item.get("metrics") or {}
             proxy_requests += metrics.get("requests") or 0.0
@@ -806,6 +826,11 @@ def derive_sample(nodes, previous):
             "ttft_avg_s": ttft_sum / ttft_count if ttft_count else None,
             "ttft_p50_s": ttft_p50,
             "ttft_p95_s": ttft_p95,
+            "context_max_tokens": max_model_len,
+            "context_prompt_avg_tokens": prompt_sum / prompt_count if prompt_count else None,
+            "context_prompt_p50_tokens": prompt_p50,
+            "context_prompt_p95_tokens": prompt_p95,
+            "context_usage_p95": (prompt_p95 / max_model_len) if prompt_p95 is not None and max_model_len else None,
         }
     return sample
 
@@ -929,6 +954,10 @@ INDEX_HTML = r"""<!doctype html>
     .chart.large { height: 260px; }
     .chart text { fill: var(--muted); font-size: 10px; }
     .chart path, .chart line { vector-effect: non-scaling-stroke; }
+    .chart-head { margin-bottom: 10px; }
+    .chart-head h2 { margin: 0 0 4px; font-size: 16px; }
+    .chart-head p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.35; }
+    .chart-head code { color: var(--text); font-size: 11px; }
     .error { margin-top: 8px; padding: 8px; background: rgba(251,113,133,.08); border: 1px solid rgba(251,113,133,.35); border-radius: 6px; color: #fecdd3; }
     .small { font-size: 12px; }
     @media (max-width: 1200px) { .cards, .grid { grid-template-columns: 1fr; } .card.cluster { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -947,27 +976,28 @@ INDEX_HTML = r"""<!doctype html>
     <section class="cards" id="cards"></section>
     <section class="grid" id="nodes"></section>
     <section class="grid">
-      <div class="panel"><h2 class="metric-tip" data-tip="Output-token generation rate over the retained history window.">Generation TPS - 24h</h2><svg class="chart" id="throughput"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="Prompt/input token processing rate over the retained history window.">Prompt TPS - 24h</h2><svg class="chart" id="prompt-throughput"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="Combined prompt plus generation token throughput.">Total Token TPS - 24h</h2><svg class="chart" id="total-throughput"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="vLLM KV cache occupancy percentage. High values can increase queueing or preemptions.">KV Cache - 24h</h2><svg class="chart" id="kv"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="GPU core temperature in Celsius from nvidia-smi.">GPU Temperature - 24h</h2><svg class="chart" id="gpu-temp"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="GPU power draw in watts from nvidia-smi.">GPU Power - 24h</h2><svg class="chart" id="gpu-power"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="Combined chart with temperature, power and GPU utilization; dashed line is the peer node.">GPU Temp / Power / Util - 24h</h2><svg class="chart large" id="gpu-combined"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="CPU non-idle time calculated from /proc/stat deltas.">CPU Busy - 24h</h2><svg class="chart" id="cpu"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="CPU time waiting on disk or device I/O from /proc/stat deltas.">IOwait - 24h</h2><svg class="chart" id="iowait"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="Speculative decoding acceptance ratio from vLLM draft and accepted token counters, when exported.">DFlash Acceptance - 24h</h2><svg class="chart" id="acceptance"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="vLLM request error rate calculated from request_success_total with finished_reason=error.">Error Rate - 24h</h2><svg class="chart" id="errors"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="The vLLM estimated read/write byte counters are zero on this build, so this chart uses populated vLLM counters: local prefill compute tokens/s on the left axis and prefix-cache hit tokens/s on the right axis.">vLLM Prefill Compute / Cache Tokens/s - 24h</h2><svg class="chart large" id="vllm-prefill-source"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="Prefix-cache hit rate on the left axis, and cache-hit prompt tokens/s on the right axis.">Prefix Cache Efficiency - 24h</h2><svg class="chart large" id="prefix-efficiency"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="Time to first token p95 and p50 from vLLM histogram metrics.">TTFT p95 / p50 - 24h</h2><svg class="chart large" id="ttft-latency"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="Active requests versus queued requests. Waiting above zero means scheduler pressure.">Queue Pressure - 24h</h2><svg class="chart large" id="queue-pressure"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="Prompt prefill throughput versus output generation throughput.">Prompt vs Generation TPS - 24h</h2><svg class="chart large" id="prompt-generation"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="Host memory pressure versus vLLM KV cache occupancy.">Memory Pressure / KV Cache - 24h</h2><svg class="chart large" id="memory-kv"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="CPU IOwait on the left axis and root disk read+write bytes/s on the right axis.">IOwait / Disk I/O - 24h</h2><svg class="chart large" id="io-disk"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="Per-interface network throughput for important interfaces such as bond and Wi-Fi.">Network Interfaces - 24h</h2><svg class="chart large" id="network-ifaces"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="Proxy request activity, chat activity, web-search activity, and error rates.">Proxy Activity / Errors - 24h</h2><svg class="chart large" id="proxy-activity"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="vLLM request completion outcomes: stop, length, error, abort, and repetition rates.">Request Outcomes - 24h</h2><svg class="chart large" id="request-outcomes"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>Generation TPS - 24h</h2><p>So what: rising output TPS means decode is active; persistently low values during requests point to model/kernel bottlenecks or oversized context. Metrics: <code>generation_tps</code>.</p></div><svg class="chart" id="throughput"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>Prompt TPS - 24h</h2><p>So what: spikes mean prefill/context ingestion. If prompt TPS dominates generation TPS, reduce prompt size, improve prefix cache reuse, or lower concurrency. Metrics: <code>prompt_tps</code>.</p></div><svg class="chart" id="prompt-throughput"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>Total Token TPS - 24h</h2><p>So what: total throughput should rise under load. If requests are active and this stays flat, check queue, KV cache, and GPU utilization. Metrics: <code>total_tps</code>.</p></div><svg class="chart" id="total-throughput"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>KV Cache - 24h</h2><p>So what: high KV cache means context/concurrency pressure. If it approaches 1.0, reduce max context/concurrency or raise available GPU memory. Metrics: <code>kv_cache_usage</code>.</p></div><svg class="chart" id="kv"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>Context Window Usage - 24h</h2><p>So what: p95 near the max context means agents are sending huge prompts; expect higher TTFT and cache pressure. Consider compaction or lower max output. Metrics: <code>context_usage_p95</code>, <code>context_prompt_p95_tokens</code>.</p></div><svg class="chart large" id="context-usage"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>GPU Temperature - 24h</h2><p>So what: rising temperature under load is normal; sustained high temperature can throttle clocks. Improve cooling if temperature climbs while TPS drops. Metrics: <code>gpu_temp_c</code>.</p></div><svg class="chart" id="gpu-temp"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>GPU Power - 24h</h2><p>So what: power rising with TPS means GPU work is happening; low power during requests suggests CPU, I/O, queue, or scheduler bottleneck. Metrics: <code>gpu_power_w</code>.</p></div><svg class="chart" id="gpu-power"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>GPU Temp / Power / Util - 24h</h2><p>So what: healthy load shows utilization and power moving together. High temperature with low utilization suggests cooling or background load; low utilization with queues suggests serving bottlenecks. Metrics: <code>gpu_temp_c</code>, <code>gpu_power_w</code>, <code>gpu_util_pct</code>.</p></div><svg class="chart large" id="gpu-combined"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>CPU Busy - 24h</h2><p>So what: CPU spikes are normal for orchestration; sustained high CPU with low GPU utilization means host-side overhead may be limiting vLLM. Metrics: <code>cpu_busy</code>.</p></div><svg class="chart" id="cpu"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>IOwait - 24h</h2><p>So what: low IOwait is good. If IOwait rises during inference, disk, swap, or model loading is stalling the host. Metrics: <code>cpu_iowait</code>.</p></div><svg class="chart" id="iowait"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>DFlash Acceptance - 24h</h2><p>So what: higher acceptance means speculative tokens are useful; low acceptance means draft work is wasted and may hurt throughput. Metrics: <code>acceptance_rate</code>.</p></div><svg class="chart" id="acceptance"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>Error Rate - 24h</h2><p>So what: should stay at zero. Any rise means failed vLLM requests; check context overflow, backend errors, and client timeouts. Metrics: <code>error_rate</code>.</p></div><svg class="chart" id="errors"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>vLLM Prefill Compute / Cache Tokens/s - 24h</h2><p>So what: cache-hit tokens are cheap; compute tokens are expensive. If compute dominates for repeated agent work, improve prompt reuse or prefix caching. Metrics: <code>prefill_compute_tps</code>, <code>prefill_cache_hit_tps</code>.</p></div><svg class="chart large" id="vllm-prefill-source"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>Prefix Cache Efficiency - 24h</h2><p>So what: higher hit rate is good. Low hit rate with repeated workflows means prompts are changing too much or cache is being evicted. Metrics: <code>prefix_hit_rate</code>, <code>prefill_cache_hit_tps</code>.</p></div><svg class="chart large" id="prefix-efficiency"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>TTFT p95 / p50 - 24h</h2><p>So what: p95 should stay close to p50. If p95 climbs, large prompts, queueing, or KV pressure are causing slow first tokens. Metrics: <code>ttft_p95_s</code>, <code>ttft_p50_s</code>.</p></div><svg class="chart large" id="ttft-latency"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>Queue Pressure - 24h</h2><p>So what: waiting should usually be zero. If waiting grows, lower concurrency, reduce max tokens/context, or increase serving capacity. Metrics: <code>requests_running</code>, <code>requests_waiting</code>.</p></div><svg class="chart large" id="queue-pressure"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>Prompt vs Generation TPS - 24h</h2><p>So what: prompt-heavy workloads are context-bound; generation-heavy workloads are decode-bound. Use this to decide whether to optimize cache/context or decode throughput. Metrics: <code>prompt_tps</code>, <code>generation_tps</code>.</p></div><svg class="chart large" id="prompt-generation"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>Memory Pressure / KV Cache - 24h</h2><p>So what: high host memory plus high KV cache means you are close to pressure. Reduce context/concurrency or increase memory headroom. Metrics: <code>memory_pressure</code>, <code>kv_cache_usage</code>.</p></div><svg class="chart large" id="memory-kv"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>IOwait / Disk I/O - 24h</h2><p>So what: disk traffic is fine during startup, but high IOwait during requests suggests swap or storage bottlenecks. Metrics: <code>cpu_iowait</code>, <code>disk_read_bps</code>.</p></div><svg class="chart large" id="io-disk"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>Network Interfaces - 24h</h2><p>So what: IB/bond traffic should carry node-to-node work; Wi-Fi traffic should mostly be API/proxy/dashboard. Unexpected Wi-Fi spikes may mean traffic is not using IB. Metrics: per-interface RX+TX bytes/s.</p></div><svg class="chart large" id="network-ifaces"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>Proxy Activity / Errors - 24h</h2><p>So what: request/search rates show tool and internet use. 5xx/backend errors should stay zero; if they rise, inspect proxy backend and internet path. Metrics: <code>proxy_request_rate</code>, <code>proxy_chat_rate</code>, <code>proxy_web_search_rate</code>, <code>proxy_5xx_rate</code>.</p></div><svg class="chart large" id="proxy-activity"></svg></div>
+      <div class="panel"><div class="chart-head"><h2>Request Outcomes - 24h</h2><p>So what: stop is healthy. Length means max tokens truncation; error/abort/repetition need investigation. Metrics: <code>request_stop_rate</code>, <code>request_length_rate</code>, <code>error_rate</code>, <code>request_abort_rate</code>.</p></div><svg class="chart large" id="request-outcomes"></svg></div>
     </section>
   </main>
   <script>
@@ -1376,6 +1406,7 @@ INDEX_HTML = r"""<!doctype html>
       renderChart("prompt-throughput", data.history, "prompt_tps", 1, nodeDefs);
       renderChart("total-throughput", data.history, "total_tps", 1, nodeDefs);
       renderChart("kv", data.history, "kv_cache_usage", 1, nodeDefs);
+      renderDualAxisMetricChart("context-usage", data.history, nodeDefs, "context_usage_p95", "context_prompt_p95_tokens", {left:"p95 context", right:"p95 tokens", leftMax:1, leftFmt:pct, rightFmt:v=>fmt(v,0)});
       renderChart("gpu-temp", data.history, "gpu_temp_c", 1, nodeDefs);
       renderChart("gpu-power", data.history, "gpu_power_w", 1, nodeDefs);
       renderGpuCombinedChart("gpu-combined", data.history, nodeDefs);
