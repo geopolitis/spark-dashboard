@@ -683,7 +683,49 @@ INDEX_HTML = r"""<!doctype html>
     .summary-head strong { margin-top: 4px; }
     .tile-grid { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
     .tile { border: 1px solid rgba(255,255,255,.08); border-radius: 7px; padding: 10px; background: rgba(255,255,255,.025); min-width:0; }
-    .tile[title], .metric-tip[title] { cursor: help; }
+    .tile[data-tip], .metric-tip[data-tip] { cursor: help; position: relative; }
+    .tile[data-tip]::after, .metric-tip[data-tip]::after {
+      content: attr(data-tip);
+      position: absolute;
+      left: 10px;
+      top: calc(100% + 8px);
+      width: max-content;
+      max-width: min(360px, 80vw);
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: #05080d;
+      color: var(--text);
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+      font-size: 12px;
+      line-height: 1.35;
+      font-weight: 500;
+      white-space: normal;
+      opacity: 0;
+      transform: translateY(4px);
+      pointer-events: none;
+      transition: opacity .12s ease, transform .12s ease;
+      z-index: 50;
+    }
+    .tile[data-tip]::before, .metric-tip[data-tip]::before {
+      content: "";
+      position: absolute;
+      left: 18px;
+      top: calc(100% + 3px);
+      border: 5px solid transparent;
+      border-bottom-color: #05080d;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .12s ease;
+      z-index: 51;
+    }
+    .tile[data-tip]:hover::after, .tile[data-tip]:focus-visible::after,
+    .metric-tip[data-tip]:hover::after, .metric-tip[data-tip]:focus-visible::after,
+    .tile[data-tip]:hover::before, .tile[data-tip]:focus-visible::before,
+    .metric-tip[data-tip]:hover::before, .metric-tip[data-tip]:focus-visible::before {
+      opacity: 1;
+      transform: translateY(0);
+    }
     .tile span { display:block; color: var(--muted); font-size: 12px; }
     .tile b { display:block; font-size: 18px; margin-top: 4px; font-weight: 650; overflow-wrap:anywhere; }
     .tile small { display:block; color: var(--muted); margin-top: 4px; line-height: 1.35; }
@@ -722,19 +764,19 @@ INDEX_HTML = r"""<!doctype html>
     <section class="cards" id="cards"></section>
     <section class="grid" id="nodes"></section>
     <section class="grid">
-      <div class="panel"><h2 class="metric-tip" title="Output-token generation rate over the retained history window.">Generation TPS - 24h</h2><svg class="chart" id="throughput"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="Prompt/input token processing rate over the retained history window.">Prompt TPS - 24h</h2><svg class="chart" id="prompt-throughput"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="Combined prompt plus generation token throughput.">Total Token TPS - 24h</h2><svg class="chart" id="total-throughput"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="vLLM KV cache occupancy percentage. High values can increase queueing or preemptions.">KV Cache - 24h</h2><svg class="chart" id="kv"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="GPU core temperature in Celsius from nvidia-smi.">GPU Temperature - 24h</h2><svg class="chart" id="gpu-temp"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="GPU power draw in watts from nvidia-smi.">GPU Power - 24h</h2><svg class="chart" id="gpu-power"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="Combined chart with temperature, power and GPU utilization; dashed line is the peer node.">GPU Temp / Power / Util - 24h</h2><svg class="chart large" id="gpu-combined"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="CPU non-idle time calculated from /proc/stat deltas.">CPU Busy - 24h</h2><svg class="chart" id="cpu"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="CPU time waiting on disk or device I/O from /proc/stat deltas.">IOwait - 24h</h2><svg class="chart" id="iowait"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="Speculative decoding acceptance ratio from vLLM draft and accepted token counters, when exported.">DFlash Acceptance - 24h</h2><svg class="chart" id="acceptance"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="vLLM request error rate calculated from request_success_total with finished_reason=error.">Error Rate - 24h</h2><svg class="chart" id="errors"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="Estimated vLLM read bandwidth per second derived from vLLM counters.">vLLM Read Bytes/s - 24h</h2><svg class="chart" id="vllm-read"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="Estimated vLLM write bandwidth per second derived from vLLM counters.">vLLM Write Bytes/s - 24h</h2><svg class="chart" id="vllm-write"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="Output-token generation rate over the retained history window.">Generation TPS - 24h</h2><svg class="chart" id="throughput"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="Prompt/input token processing rate over the retained history window.">Prompt TPS - 24h</h2><svg class="chart" id="prompt-throughput"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="Combined prompt plus generation token throughput.">Total Token TPS - 24h</h2><svg class="chart" id="total-throughput"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="vLLM KV cache occupancy percentage. High values can increase queueing or preemptions.">KV Cache - 24h</h2><svg class="chart" id="kv"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="GPU core temperature in Celsius from nvidia-smi.">GPU Temperature - 24h</h2><svg class="chart" id="gpu-temp"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="GPU power draw in watts from nvidia-smi.">GPU Power - 24h</h2><svg class="chart" id="gpu-power"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="Combined chart with temperature, power and GPU utilization; dashed line is the peer node.">GPU Temp / Power / Util - 24h</h2><svg class="chart large" id="gpu-combined"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="CPU non-idle time calculated from /proc/stat deltas.">CPU Busy - 24h</h2><svg class="chart" id="cpu"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="CPU time waiting on disk or device I/O from /proc/stat deltas.">IOwait - 24h</h2><svg class="chart" id="iowait"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="Speculative decoding acceptance ratio from vLLM draft and accepted token counters, when exported.">DFlash Acceptance - 24h</h2><svg class="chart" id="acceptance"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="vLLM request error rate calculated from request_success_total with finished_reason=error.">Error Rate - 24h</h2><svg class="chart" id="errors"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="Estimated vLLM read bandwidth per second derived from vLLM counters.">vLLM Read Bytes/s - 24h</h2><svg class="chart" id="vllm-read"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="Estimated vLLM write bandwidth per second derived from vLLM counters.">vLLM Write Bytes/s - 24h</h2><svg class="chart" id="vllm-write"></svg></div>
     </section>
   </main>
   <script>
@@ -752,7 +794,7 @@ INDEX_HTML = r"""<!doctype html>
       return `${fmt(n, i ? 1 : 0)} ${units[i]}`;
     };
     function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-    function tip(s) { return ` title="${esc(s)}"`; }
+    function tip(s) { return ` data-tip="${esc(s)}" tabindex="0"`; }
     function firstModel(node) {
       for (const v of node.vllm || []) {
         const model = (v.models || [])[0];
