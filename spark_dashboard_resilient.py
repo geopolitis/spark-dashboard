@@ -16,6 +16,7 @@ DEFAULTS = {
     "SPARK_DASHBOARD_PORT": "8090",
     "SPARK_DASHBOARD_INTERVAL": "15",
     "SPARK_DASHBOARD_HISTORY": str(24 * 60 * 60),
+    "SPARK_DASHBOARD_HISTORY_FILE": "data/history.jsonl",
     "LOCAL_NODE_ID": "local",
     "LOCAL_NODE_LABEL": "Local node",
     "LOCAL_NODE_HOST": "127.0.0.1",
@@ -44,6 +45,16 @@ def endpoint_url(explicit, host, port):
 PORT = int(config("SPARK_DASHBOARD_PORT"))
 INTERVAL_SECONDS = int(config("SPARK_DASHBOARD_INTERVAL"))
 HISTORY_SECONDS = int(config("SPARK_DASHBOARD_HISTORY"))
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def config_path(name):
+    path = config(name)
+    return path if os.path.isabs(path) else os.path.join(SCRIPT_DIR, path)
+
+
+HISTORY_FILE = config_path("SPARK_DASHBOARD_HISTORY_FILE")
+HISTORY_COMPACT_EVERY = max(1, int(300 / max(INTERVAL_SECONDS, 1)))
 
 def build_nodes():
     remote_host = config("REMOTE_NODE_HOST")
@@ -83,10 +94,61 @@ STATE = {
     "history": [],
 }
 LOCK = threading.Lock()
+SAMPLES_SINCE_COMPACT = 0
 
 
 def now_ms():
     return int(time.time() * 1000)
+
+
+def history_cutoff_ms():
+    return now_ms() - HISTORY_SECONDS * 1000
+
+
+def recent_history(items):
+    cutoff = history_cutoff_ms()
+    return [item for item in items if isinstance(item, dict) and item.get("t", 0) >= cutoff]
+
+
+def load_history():
+    items = []
+    if not os.path.exists(HISTORY_FILE):
+        return items
+    try:
+        with open(HISTORY_FILE, "r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    items.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except Exception as exc:
+        print(f"history load failed: {exc}", flush=True)
+        return []
+    return recent_history(items)
+
+
+def append_history_sample(sample):
+    try:
+        os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
+        with open(HISTORY_FILE, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(sample, separators=(",", ":")) + "\n")
+    except Exception as exc:
+        print(f"history append failed: {exc}", flush=True)
+
+
+def compact_history_file(history):
+    try:
+        os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
+        tmp_path = f"{HISTORY_FILE}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            for item in recent_history(history):
+                handle.write(json.dumps(item, separators=(",", ":")) + "\n")
+        os.replace(tmp_path, HISTORY_FILE)
+    except Exception as exc:
+        print(f"history compact failed: {exc}", flush=True)
 
 
 def ok(value=None, **extra):
@@ -634,6 +696,7 @@ def derive_sample(nodes, previous):
 
 
 def collector():
+    global SAMPLES_SINCE_COMPACT
     while True:
         nodes = {}
         for node in NODES:
@@ -654,8 +717,13 @@ def collector():
             STATE["updated_at"] = now_ms()
             STATE["nodes"] = nodes
             STATE["history"].append(sample)
-            cutoff = now_ms() - HISTORY_SECONDS * 1000
-            STATE["history"] = [item for item in STATE["history"] if item["t"] >= cutoff]
+            STATE["history"] = recent_history(STATE["history"])
+            history_snapshot = list(STATE["history"])
+        append_history_sample(sample)
+        SAMPLES_SINCE_COMPACT += 1
+        if SAMPLES_SINCE_COMPACT >= HISTORY_COMPACT_EVERY:
+            compact_history_file(history_snapshot)
+            SAMPLES_SINCE_COMPACT = 0
         time.sleep(INTERVAL_SECONDS)
 
 
@@ -1168,6 +1236,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    restored = load_history()
+    if restored:
+        with LOCK:
+            STATE["history"] = restored
+            STATE["updated_at"] = restored[-1].get("t")
+        compact_history_file(restored)
+        print(f"Loaded {len(restored)} history samples from {HISTORY_FILE}", flush=True)
     threading.Thread(target=collector, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"Spark dashboard listening on 0.0.0.0:{PORT}", flush=True)

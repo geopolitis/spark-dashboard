@@ -3,4 +3,5 @@ __pycache__/
 *.out
 *.pid
 .env
+data/
 .DS_Store

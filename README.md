@@ -35,6 +35,7 @@ Useful optional overrides:
 SPARK_DASHBOARD_PORT=8090
 SPARK_DASHBOARD_INTERVAL=15
 SPARK_DASHBOARD_HISTORY=86400
+SPARK_DASHBOARD_HISTORY_FILE=data/history.jsonl
 
 LOCAL_NODE_LABEL="Local node"
 LOCAL_VLLM_URL=http://127.0.0.1:8080
@@ -59,6 +60,8 @@ DASHBOARD_HOME="$PWD" ./start_spark_dashboard_resilient.sh
 ```
 
 The start script loads `$DASHBOARD_HOME/.env` when present.
+
+History samples are persisted as JSONL at `SPARK_DASHBOARD_HISTORY_FILE`. Relative paths are resolved from the dashboard directory. The default keeps `data/history.jsonl` and reloads retained samples after a restart.
 
 ## Deploy
 
