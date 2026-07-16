@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import shlex
 import socket
 import subprocess
 import threading
@@ -265,6 +266,60 @@ def collect_vllm(node):
     return results
 
 
+def parse_vllm_command(command):
+    if not command:
+        return None
+    try:
+        parts = shlex.split(command)
+    except Exception:
+        parts = command.split()
+    if "serve" not in parts:
+        return {"command": command}
+    serve_index = parts.index("serve")
+    config = {"command": command, "model_path": None}
+    if serve_index + 1 < len(parts) and not parts[serve_index + 1].startswith("-"):
+        config["model_path"] = parts[serve_index + 1]
+    value_flags = {
+        "--served-model-name": "served_model_name",
+        "--max-model-len": "max_model_len",
+        "--max-num-seqs": "max_num_seqs",
+        "--max-num-batched-tokens": "max_num_batched_tokens",
+        "--gpu-memory-utilization": "gpu_memory_utilization",
+        "--kv-cache-dtype": "kv_cache_dtype",
+        "--load-format": "load_format",
+        "--attention-backend": "attention_backend",
+        "--moe-backend": "moe_backend",
+        "--tool-call-parser": "tool_call_parser",
+    }
+    bool_flags = {
+        "--enable-prefix-caching": "prefix_caching",
+        "--enable-chunked-prefill": "chunked_prefill",
+        "--async-scheduling": "async_scheduling",
+        "--trust-remote-code": "trust_remote_code",
+    }
+    for index, part in enumerate(parts):
+        if part in value_flags and index + 1 < len(parts):
+            config[value_flags[part]] = parts[index + 1]
+        elif any(part.startswith(flag + "=") for flag in value_flags):
+            flag, value = part.split("=", 1)
+            config[value_flags[flag]] = value
+        elif part in bool_flags:
+            config[bool_flags[part]] = True
+    return config
+
+
+def collect_vllm_runtime(node):
+    try:
+        command = node_cmd(
+            node,
+            "ps -eo args= | awk '/vllm serve/ && !/awk/ {print; exit}'",
+            timeout=3,
+        )
+        return ok(parse_vllm_command(command))
+    except Exception as exc:
+        return fail(exc)
+
+
 def collect_proxy(node):
     items = []
     for base in node.get("proxy", []):
@@ -420,6 +475,7 @@ def collect_node(node):
         },
         "hardware": collect_hardware(node),
         "vllm": collect_vllm(node),
+        "vllm_runtime": collect_vllm_runtime(node),
         "proxy": collect_proxy(node),
     }
     status["ok"] = bool(
@@ -694,6 +750,19 @@ INDEX_HTML = r"""<!doctype html>
     };
     function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
     function tip(s) { return ` title="${esc(s)}"`; }
+    function firstModel(node) {
+      for (const v of node.vllm || []) {
+        const model = (v.models || [])[0];
+        if (model) return model;
+      }
+      return {};
+    }
+    function shortModelName(name) {
+      name = String(name || "n/a");
+      if (name.length <= 34) return name;
+      const parts = name.split("/");
+      return parts.length > 1 ? parts.slice(-2).join("/") : `${name.slice(0, 31)}...`;
+    }
     function clamp(v, min=0, max=100) {
       v = Number(v);
       if (Number.isNaN(v)) return 0;
@@ -834,6 +903,9 @@ INDEX_HTML = r"""<!doctype html>
       </article>`);
       for (const n of nodes) {
         const h = latest.nodes[n.id] || {};
+        const model = firstModel(n);
+        const runtime = (n.vllm_runtime || {}).value || {};
+        const contextLen = model.max_model_len || runtime.max_model_len;
         const nodeBackends = [...(n.vllm || []), ...(n.proxy || [])];
         const backendOk = nodeBackends.filter(item => item.ok).length;
         const ifaceWithIp = ((n.hardware || {}).value?.network || []).filter(i => (i.addresses || []).length && i.iface !== "lo");
@@ -847,11 +919,12 @@ INDEX_HTML = r"""<!doctype html>
             <div class="status ${backendOk === nodeBackends.length ? "ok" : "warn"}">${backendOk}/${nodeBackends.length} backends</div>
           </div>
           <div class="tile-grid">
+            <div class="tile"${tip("Currently served vLLM model and key launch parameters parsed from /v1/models and the vLLM serve process.")}><span>Model</span><b>${esc(shortModelName(model.id || runtime.served_model_name || runtime.model_path))}</b><small>ctx ${fmt(contextLen,0)} | seqs ${esc(runtime.max_num_seqs || "n/a")} | batch ${esc(runtime.max_num_batched_tokens || "n/a")}</small></div>
             <div class="tile"${tip("Output-token generation speed, with prompt/input token prefill speed and combined token throughput.")}><span>Tokens</span><b>${fmt(h.generation_tps)} gen/s</b><small>prompt ${fmt(h.prompt_tps)} | total ${fmt(h.total_tps)}</small></div>
             <div class="tile"${tip("TTFT is time to first token from vLLM's Prometheus histogram. Main value is p95 latency; smaller is better.")}><span>TTFT p95</span><b>${ms(h.ttft_p95_s)}</b><small>p50 ${ms(h.ttft_p50_s)} | avg ${ms(h.ttft_avg_s)}</small></div>
             <div class="tile"${tip("GPU utilization percentage, with current GPU temperature in Celsius and power draw in watts.")}><span>GPU Util</span><b>${fmt(h.gpu_util_pct,0)}%</b><small>${fmt(h.gpu_temp_c,0)}C / ${fmt(h.gpu_power_w,1)}W</small>${gpuDiagram(h)}</div>
             <div class="tile"${tip("CPU busy percentage from /proc/stat. IOwait is time waiting on disk or device I/O; memory is used pressure from MemAvailable.")}><span>CPU</span><b>${pct(h.cpu_busy)}</b><small>iowait ${pct(h.cpu_iowait)} | mem ${pct(h.memory_pressure)}</small></div>
-            <div class="tile"${tip("vLLM runtime pressure. KV is cache occupancy; run/wait are active and queued requests; prefix is prefix-cache hit rate.")}><span>vLLM</span><b>KV ${pct(h.kv_cache_usage)}</b><small>run ${fmt(h.requests_running,0)} | wait ${fmt(h.requests_waiting,0)} | prefix ${pct(h.prefix_hit_rate)}</small></div>
+            <div class="tile"${tip("vLLM runtime pressure and cache configuration. KV is cache occupancy; prefix is prefix-cache hit rate.")}><span>vLLM Cache</span><b>KV ${pct(h.kv_cache_usage)}</b><small>${esc(runtime.kv_cache_dtype || "kv n/a")} | prefix ${pct(h.prefix_hit_rate)} | ${runtime.prefix_caching ? "prefix on" : "prefix n/a"}</small></div>
             <div class="tile"${tip("Host disk read plus write throughput, derived from /proc/diskstats deltas.")}><span>Host I/O</span><b>${bytes((h.disk_read_bps || 0) + (h.disk_write_bps || 0))}/s</b><small>R ${bytes(h.disk_read_bps)}/s | W ${bytes(h.disk_write_bps)}/s</small></div>
             <div class="tile"${tip("Aggregate network receive plus transmit throughput across interfaces, derived from /proc/net/dev deltas.")}><span>Network</span><b>${bytes((h.net_rx_bps || 0) + (h.net_tx_bps || 0))}/s</b><small>RX ${bytes(h.net_rx_bps)}/s | TX ${bytes(h.net_tx_bps)}/s</small></div>
             <div class="tile span-2"${tip("Detected non-loopback interface addresses, useful for checking Wi-Fi, IB/bond, and service routing.")}><span>Addresses</span><b>${esc(primaryIps || "no-ip")}</b><small>${ifaceWithIp.length} interfaces with addresses</small></div>
@@ -873,8 +946,12 @@ INDEX_HTML = r"""<!doctype html>
         const vllm = (n.vllm || []).map(v => {
           const m = v.metrics || {};
           const model = (v.models || [])[0] || {};
+          const runtime = (n.vllm_runtime || {}).value || {};
           return `<div class="${v.ok ? "ok" : "bad"} mono">${esc(v.base_url)} ${v.ok ? "ok" : esc(v.error)}
             <div class="small">model ${esc(model.id || "n/a")} ctx ${fmt(model.max_model_len,0)}</div>
+            <div class="small">root ${esc(model.root || runtime.model_path || "n/a")}</div>
+            <div class="small">params gpu_mem ${esc(runtime.gpu_memory_utilization || "n/a")} seqs ${esc(runtime.max_num_seqs || "n/a")} batch ${esc(runtime.max_num_batched_tokens || "n/a")} kv ${esc(runtime.kv_cache_dtype || "n/a")}</div>
+            <div class="small">cache prefix ${runtime.prefix_caching ? "on" : "n/a"} chunked_prefill ${runtime.chunked_prefill ? "on" : "n/a"} attention ${esc(runtime.attention_backend || "n/a")} moe ${esc(runtime.moe_backend || "n/a")}</div>
             <div class="small">gen ${fmt(m.generation_tokens,0)} prompt ${fmt(m.prompt_tokens,0)} total ${fmt(m.total_tokens,0)}</div>
             <div class="small">running ${fmt(m.requests_running,0)} waiting ${fmt(m.requests_waiting,0)} KV ${pct(m.kv_cache_usage)} prefix ${pct(m.prefix_hit_rate)}</div>
             <div class="small">TTFT p95 ${ms(m.ttft_p95_s)} p50 ${ms(m.ttft_p50_s)} avg ${ms(m.ttft_avg_s)}</div>
