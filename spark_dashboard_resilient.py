@@ -274,6 +274,10 @@ def parse_vllm_metrics(text):
     draft = parse_sum(text, r'^vllm:spec_decode_num_draft_tokens_total\{[^}]*\}\s+([0-9.eE+-]+)')
     accepted = parse_sum(text, r'^vllm:spec_decode_num_accepted_tokens_total\{[^}]*\}\s+([0-9.eE+-]+)')
     errors = parse_sum(text, r'^vllm:request_success_total\{[^}]*finished_reason="error"[^}]*\}\s+([0-9.eE+-]+)') or 0.0
+    request_stop = parse_sum(text, r'^vllm:request_success_total\{[^}]*finished_reason="stop"[^}]*\}\s+([0-9.eE+-]+)') or 0.0
+    request_length = parse_sum(text, r'^vllm:request_success_total\{[^}]*finished_reason="length"[^}]*\}\s+([0-9.eE+-]+)') or 0.0
+    request_abort = parse_sum(text, r'^vllm:request_success_total\{[^}]*finished_reason="abort"[^}]*\}\s+([0-9.eE+-]+)') or 0.0
+    request_repetition = parse_sum(text, r'^vllm:request_success_total\{[^}]*finished_reason="repetition"[^}]*\}\s+([0-9.eE+-]+)') or 0.0
     ttft = parse_histogram(text, "vllm:time_to_first_token_seconds")
     acceptance = None
     if draft and draft > 0 and accepted is not None:
@@ -303,6 +307,10 @@ def parse_vllm_metrics(text):
         "accepted_tokens": accepted,
         "acceptance_rate": acceptance,
         "request_errors": errors,
+        "request_stop": request_stop,
+        "request_length": request_length,
+        "request_abort": request_abort,
+        "request_repetition": request_repetition,
         "ttft_count": ttft.get("count") if ttft else None,
         "ttft_avg_s": (ttft.get("sum") / ttft.get("count")) if ttft and ttft.get("sum") is not None and ttft.get("count") else None,
         "ttft_p50_s": histogram_quantile(ttft, 0.50),
@@ -587,6 +595,16 @@ def derive_sample(nodes, previous):
         accepted = None
         draft = None
         errors = 0.0
+        request_stop = 0.0
+        request_length = 0.0
+        request_abort = 0.0
+        request_repetition = 0.0
+        proxy_requests = 0.0
+        proxy_chat_requests = 0.0
+        proxy_web_search_calls = 0.0
+        proxy_errors_5xx = 0.0
+        proxy_backend_errors = 0.0
+        proxy_web_search_errors = 0.0
         ttft_count = 0.0
         ttft_sum = 0.0
         ttft_p50 = None
@@ -608,6 +626,10 @@ def derive_sample(nodes, previous):
             running += metrics.get("requests_running") or 0.0
             waiting += metrics.get("requests_waiting") or 0.0
             errors += metrics.get("request_errors") or 0.0
+            request_stop += metrics.get("request_stop") or 0.0
+            request_length += metrics.get("request_length") or 0.0
+            request_abort += metrics.get("request_abort") or 0.0
+            request_repetition += metrics.get("request_repetition") or 0.0
             if metrics.get("kv_cache_usage") is not None:
                 kv = max(kv or 0.0, metrics["kv_cache_usage"])
             if metrics.get("accepted_tokens") is not None:
@@ -621,6 +643,14 @@ def derive_sample(nodes, previous):
                 ttft_p50 = max(ttft_p50 or 0.0, metrics["ttft_p50_s"])
             if metrics.get("ttft_p95_s") is not None:
                 ttft_p95 = max(ttft_p95 or 0.0, metrics["ttft_p95_s"])
+        for item in node.get("proxy", []):
+            metrics = item.get("metrics") or {}
+            proxy_requests += metrics.get("requests") or 0.0
+            proxy_chat_requests += metrics.get("chat_requests") or 0.0
+            proxy_web_search_calls += metrics.get("web_search_calls") or 0.0
+            proxy_errors_5xx += metrics.get("errors_5xx") or 0.0
+            proxy_backend_errors += metrics.get("backend_errors") or 0.0
+            proxy_web_search_errors += metrics.get("web_search_errors") or 0.0
         prev = previous.get("nodes", {}).get(node_id, {}) if previous else {}
         elapsed = max((sample["t"] - previous.get("t", sample["t"])) / 1000.0, 1.0) if previous else None
         gen_tps = None
@@ -639,7 +669,18 @@ def derive_sample(nodes, previous):
         prefill_compute_tps = None
         prefill_cache_hit_tps = None
         prefill_external_kv_tps = None
+        request_stop_rate = None
+        request_length_rate = None
+        request_abort_rate = None
+        request_repetition_rate = None
+        proxy_request_rate = None
+        proxy_chat_rate = None
+        proxy_web_search_rate = None
+        proxy_5xx_rate = None
+        proxy_backend_error_rate = None
+        proxy_web_search_error_rate = None
         flops_per_sec = None
+        network_interfaces = {}
         if elapsed and prev:
             gen_tps = max((generation - prev.get("generation_tokens", generation)) / elapsed, 0.0)
             prompt_tps = max((prompt - prev.get("prompt_tokens", prompt)) / elapsed, 0.0)
@@ -660,7 +701,36 @@ def derive_sample(nodes, previous):
             prefill_compute_tps = max((prefill_compute - prev.get("prefill_compute_tokens", prefill_compute)) / elapsed, 0.0)
             prefill_cache_hit_tps = max((prefill_cache_hit - prev.get("prefill_cache_hit_tokens", prefill_cache_hit)) / elapsed, 0.0)
             prefill_external_kv_tps = max((prefill_external_kv - prev.get("prefill_external_kv_tokens", prefill_external_kv)) / elapsed, 0.0)
+            request_stop_rate = max((request_stop - prev.get("request_stop", request_stop)) / elapsed, 0.0)
+            request_length_rate = max((request_length - prev.get("request_length", request_length)) / elapsed, 0.0)
+            request_abort_rate = max((request_abort - prev.get("request_abort", request_abort)) / elapsed, 0.0)
+            request_repetition_rate = max((request_repetition - prev.get("request_repetition", request_repetition)) / elapsed, 0.0)
+            proxy_request_rate = max((proxy_requests - prev.get("proxy_requests", proxy_requests)) / elapsed, 0.0)
+            proxy_chat_rate = max((proxy_chat_requests - prev.get("proxy_chat_requests", proxy_chat_requests)) / elapsed, 0.0)
+            proxy_web_search_rate = max((proxy_web_search_calls - prev.get("proxy_web_search_calls", proxy_web_search_calls)) / elapsed, 0.0)
+            proxy_5xx_rate = max((proxy_errors_5xx - prev.get("proxy_errors_5xx", proxy_errors_5xx)) / elapsed, 0.0)
+            proxy_backend_error_rate = max((proxy_backend_errors - prev.get("proxy_backend_errors", proxy_backend_errors)) / elapsed, 0.0)
+            proxy_web_search_error_rate = max((proxy_web_search_errors - prev.get("proxy_web_search_errors", proxy_web_search_errors)) / elapsed, 0.0)
             flops_per_sec = max((estimated_flops - prev.get("estimated_flops", estimated_flops)) / elapsed, 0.0)
+            prev_ifaces = prev.get("network_interfaces") or {}
+            for iface in hardware.get("network") or []:
+                name = iface.get("iface")
+                if not name or name == "lo":
+                    continue
+                old = prev_ifaces.get(name) or {}
+                rx = iface.get("rx", 0)
+                tx = iface.get("tx", 0)
+                network_interfaces[name] = {
+                    "rx": rx,
+                    "tx": tx,
+                    "rx_bps": max((rx - old.get("rx", rx)) / elapsed, 0.0),
+                    "tx_bps": max((tx - old.get("tx", tx)) / elapsed, 0.0),
+                }
+        else:
+            for iface in hardware.get("network") or []:
+                name = iface.get("iface")
+                if name and name != "lo":
+                    network_interfaces[name] = {"rx": iface.get("rx", 0), "tx": iface.get("tx", 0), "rx_bps": None, "tx_bps": None}
         sample["nodes"][node_id] = {
             "ok": node.get("ok", False),
             "cpu_total": cpu.get("total"),
@@ -712,6 +782,27 @@ def derive_sample(nodes, previous):
             "acceptance_rate": accepted / draft if draft else None,
             "request_errors": errors,
             "error_rate": err_rate,
+            "request_stop": request_stop,
+            "request_length": request_length,
+            "request_abort": request_abort,
+            "request_repetition": request_repetition,
+            "request_stop_rate": request_stop_rate,
+            "request_length_rate": request_length_rate,
+            "request_abort_rate": request_abort_rate,
+            "request_repetition_rate": request_repetition_rate,
+            "proxy_requests": proxy_requests,
+            "proxy_chat_requests": proxy_chat_requests,
+            "proxy_web_search_calls": proxy_web_search_calls,
+            "proxy_errors_5xx": proxy_errors_5xx,
+            "proxy_backend_errors": proxy_backend_errors,
+            "proxy_web_search_errors": proxy_web_search_errors,
+            "proxy_request_rate": proxy_request_rate,
+            "proxy_chat_rate": proxy_chat_rate,
+            "proxy_web_search_rate": proxy_web_search_rate,
+            "proxy_5xx_rate": proxy_5xx_rate,
+            "proxy_backend_error_rate": proxy_backend_error_rate,
+            "proxy_web_search_error_rate": proxy_web_search_error_rate,
+            "network_interfaces": network_interfaces,
             "ttft_avg_s": ttft_sum / ttft_count if ttft_count else None,
             "ttft_p50_s": ttft_p50,
             "ttft_p95_s": ttft_p95,
@@ -868,6 +959,15 @@ INDEX_HTML = r"""<!doctype html>
       <div class="panel"><h2 class="metric-tip" data-tip="Speculative decoding acceptance ratio from vLLM draft and accepted token counters, when exported.">DFlash Acceptance - 24h</h2><svg class="chart" id="acceptance"></svg></div>
       <div class="panel"><h2 class="metric-tip" data-tip="vLLM request error rate calculated from request_success_total with finished_reason=error.">Error Rate - 24h</h2><svg class="chart" id="errors"></svg></div>
       <div class="panel"><h2 class="metric-tip" data-tip="The vLLM estimated read/write byte counters are zero on this build, so this chart uses populated vLLM counters: local prefill compute tokens/s on the left axis and prefix-cache hit tokens/s on the right axis.">vLLM Prefill Compute / Cache Tokens/s - 24h</h2><svg class="chart large" id="vllm-prefill-source"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="Prefix-cache hit rate on the left axis, and cache-hit prompt tokens/s on the right axis.">Prefix Cache Efficiency - 24h</h2><svg class="chart large" id="prefix-efficiency"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="Time to first token p95 and p50 from vLLM histogram metrics.">TTFT p95 / p50 - 24h</h2><svg class="chart large" id="ttft-latency"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="Active requests versus queued requests. Waiting above zero means scheduler pressure.">Queue Pressure - 24h</h2><svg class="chart large" id="queue-pressure"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="Prompt prefill throughput versus output generation throughput.">Prompt vs Generation TPS - 24h</h2><svg class="chart large" id="prompt-generation"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="Host memory pressure versus vLLM KV cache occupancy.">Memory Pressure / KV Cache - 24h</h2><svg class="chart large" id="memory-kv"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="CPU IOwait on the left axis and root disk read+write bytes/s on the right axis.">IOwait / Disk I/O - 24h</h2><svg class="chart large" id="io-disk"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="Per-interface network throughput for important interfaces such as bond and Wi-Fi.">Network Interfaces - 24h</h2><svg class="chart large" id="network-ifaces"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="Proxy request activity, chat activity, web-search activity, and error rates.">Proxy Activity / Errors - 24h</h2><svg class="chart large" id="proxy-activity"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="vLLM request completion outcomes: stop, length, error, abort, and repetition rates.">Request Outcomes - 24h</h2><svg class="chart large" id="request-outcomes"></svg></div>
     </section>
   </main>
   <script>
@@ -1070,6 +1170,100 @@ INDEX_HTML = r"""<!doctype html>
       `;
       svg.innerHTML = html;
     }
+    function renderDualAxisMetricChart(id, history, nodeDefs, leftMetric, rightMetric, labels) {
+      const svg = document.getElementById(id);
+      if (!svg) return;
+      history = Array.isArray(history) ? history : [];
+      const W = 760, H = 260, L = 58, R = 62, T = 20, B = 42;
+      svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+      const minT = history[0]?.t || Date.now() - 1, maxT = history[history.length - 1]?.t || Date.now();
+      const nodes = (nodeDefs || []).map((node, idx) => ({id: node.id, label: node.label || node.id, dash: idx === 0 ? "" : "5 4", alpha: idx === 0 ? 1 : .95}));
+      const leftColor = labels.leftColor || "#60a5fa";
+      const rightColor = labels.rightColor || "#fbbf24";
+      const leftFmt = labels.leftFmt || fmt;
+      const rightFmt = labels.rightFmt || fmt;
+      const leftVals = [], rightVals = [];
+      for (const h of history) for (const node of nodes) {
+        const sample = h.nodes?.[node.id] || {};
+        if (sample[leftMetric] !== null && sample[leftMetric] !== undefined) leftVals.push(sample[leftMetric]);
+        if (sample[rightMetric] !== null && sample[rightMetric] !== undefined) rightVals.push(sample[rightMetric]);
+      }
+      const maxLeft = Math.max(labels.leftMax || 0, ...leftVals, 1);
+      const maxRight = Math.max(labels.rightMax || 0, ...rightVals, 1);
+      const x = t => L + ((t - minT) / Math.max(maxT - minT, 1)) * (W - L - R);
+      const yLeft = v => H - B - (Number(v || 0) / maxLeft) * (H - T - B);
+      const yRight = v => H - B - (Number(v || 0) / maxRight) * (H - T - B);
+      const pathFor = (node, metric, yFn) => {
+        const pts = history.map(h => ({t:h.t, v:h.nodes?.[node]?.[metric]})).filter(p => p.v !== null && p.v !== undefined);
+        return pts.map((p,i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)},${yFn(p.v).toFixed(1)}`).join(" ");
+      };
+      let html = `<line x1="${L}" y1="${T}" x2="${L}" y2="${H-B}" stroke="#31445b"/><line x1="${W-R}" y1="${T}" x2="${W-R}" y2="${H-B}" stroke="#31445b"/><line x1="${L}" y1="${H-B}" x2="${W-R}" y2="${H-B}" stroke="#31445b"/>`;
+      for (let i=0; i<=4; i++) {
+        const yy = T + (i / 4) * (H - T - B);
+        html += `<line x1="${L}" y1="${yy}" x2="${W-R}" y2="${yy}" stroke="#172232"/>`;
+        html += `<text x="4" y="${yy+3}" fill="${leftColor}">${leftFmt(maxLeft * (4 - i) / 4)}</text>`;
+        html += `<text x="${W-R+6}" y="${yy+3}" fill="${rightColor}">${rightFmt(maxRight * (4 - i) / 4)}</text>`;
+      }
+      html += `<text x="${L}" y="${H-12}">${new Date(minT).toLocaleTimeString()}</text><text x="${W-R-72}" y="${H-12}">${new Date(maxT).toLocaleTimeString()}</text>`;
+      for (const node of nodes) {
+        const leftPath = pathFor(node.id, leftMetric, yLeft);
+        const rightPath = pathFor(node.id, rightMetric, yRight);
+        if (leftPath) html += `<path d="${leftPath}" fill="none" stroke="${leftColor}" stroke-width="2" stroke-dasharray="${node.dash}" opacity="${node.alpha}"/>`;
+        if (rightPath) html += `<path d="${rightPath}" fill="none" stroke="${rightColor}" stroke-width="2" stroke-dasharray="${node.dash}" opacity="${node.alpha}"/>`;
+      }
+      html += `<text x="${L+6}" y="${T+14}" fill="${leftColor}">${esc(labels.left)}</text><text x="${L+126}" y="${T+14}" fill="${rightColor}">${esc(labels.right)}</text><text x="${W-R-138}" y="${T+14}">solid ${esc(nodes[0]?.label || "node 1")}</text><text x="${W-R-138}" y="${T+30}">dashed ${esc(nodes[1]?.label || "node 2")}</text>`;
+      svg.innerHTML = html;
+    }
+    function renderMultiMetricChart(id, history, nodeDefs, metrics, formatValue) {
+      const svg = document.getElementById(id);
+      if (!svg) return;
+      history = Array.isArray(history) ? history : [];
+      const W = 760, H = 260, L = 58, R = 16, T = 20, B = 42;
+      svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+      const minT = history[0]?.t || Date.now() - 1, maxT = history[history.length - 1]?.t || Date.now();
+      const series = [];
+      for (const node of nodeDefs || []) for (const metric of metrics) {
+        const pts = history.map(h => ({t:h.t, v:h.nodes?.[node.id]?.[metric.key]})).filter(p => p.v !== null && p.v !== undefined);
+        series.push({label:`${node.label || node.id} ${metric.label}`, color:metric.color, dash:metric.dash || (nodeDefs.indexOf(node) ? "5 4" : ""), points:pts});
+      }
+      const all = series.flatMap(s => s.points);
+      const maxV = Math.max(...all.map(p => p.v), 1);
+      const x = t => L + ((t - minT) / Math.max(maxT - minT, 1)) * (W - L - R);
+      const y = v => H - B - (Number(v || 0) / maxV) * (H - T - B);
+      let html = `<line x1="${L}" y1="${T}" x2="${L}" y2="${H-B}" stroke="#31445b"/><line x1="${L}" y1="${H-B}" x2="${W-R}" y2="${H-B}" stroke="#31445b"/>`;
+      for (let i=0; i<=4; i++) {
+        const val = maxV * i / 4, yy = y(val);
+        html += `<line x1="${L}" y1="${yy}" x2="${W-R}" y2="${yy}" stroke="#172232"/><text x="4" y="${yy+3}">${formatValue ? formatValue(val) : fmt(val, 2)}</text>`;
+      }
+      html += `<text x="${L}" y="${H-12}">${new Date(minT).toLocaleTimeString()}</text><text x="${W-R-72}" y="${H-12}">${new Date(maxT).toLocaleTimeString()}</text>`;
+      series.forEach((s, idx) => {
+        if (!s.points.length) return;
+        const d = s.points.map((p,i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
+        html += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" stroke-dasharray="${s.dash}" opacity=".95"/>`;
+        if (idx < 6) html += `<text x="${W-176}" y="${18 + idx * 14}" fill="${s.color}">${esc(s.label)}</text>`;
+      });
+      svg.innerHTML = html;
+    }
+    function renderNetworkInterfaceChart(id, history, nodeDefs) {
+      const metrics = [];
+      const colors = ["#36d399", "#60a5fa", "#fbbf24", "#fb7185"];
+      const ifaces = ["bond0", "wlP9s9", "enp1s0f0np0", "enP2p1s0f0np0"];
+      for (const iface of ifaces) {
+        metrics.push({key:`network_interface_${iface}_bps`, label: iface, color: colors[metrics.length % colors.length]});
+      }
+      const patched = history.map(h => {
+        const item = JSON.parse(JSON.stringify(h));
+        for (const node of nodeDefs || []) {
+          const sample = item.nodes?.[node.id] || {};
+          for (const iface of ifaces) {
+            const row = sample.network_interfaces?.[iface];
+            sample[`network_interface_${iface}_bps`] = row ? (row.rx_bps || 0) + (row.tx_bps || 0) : null;
+          }
+        }
+        return item;
+      });
+      renderMultiMetricChart(id, patched, nodeDefs, metrics, v => `${bytes(v)}/s`);
+    }
     function render(data) {
       data = data || {};
       data.nodes = data.nodes || {};
@@ -1190,6 +1384,26 @@ INDEX_HTML = r"""<!doctype html>
       renderChart("acceptance", data.history, "acceptance_rate", 1, nodeDefs);
       renderChart("errors", data.history, "error_rate", 1, nodeDefs);
       renderVllmPrefillSourceChart("vllm-prefill-source", data.history, nodeDefs);
+      renderDualAxisMetricChart("prefix-efficiency", data.history, nodeDefs, "prefix_hit_rate", "prefill_cache_hit_tps", {left:"hit rate", right:"cache tok/s", leftMax:1, leftFmt:pct, rightFmt:v=>`${fmt(v,0)}/s`});
+      renderDualAxisMetricChart("ttft-latency", data.history, nodeDefs, "ttft_p95_s", "ttft_p50_s", {left:"p95", right:"p50", leftFmt:ms, rightFmt:ms});
+      renderDualAxisMetricChart("queue-pressure", data.history, nodeDefs, "requests_running", "requests_waiting", {left:"running", right:"waiting", leftFmt:v=>fmt(v,0), rightFmt:v=>fmt(v,0)});
+      renderDualAxisMetricChart("prompt-generation", data.history, nodeDefs, "prompt_tps", "generation_tps", {left:"prompt tok/s", right:"gen tok/s", leftFmt:v=>fmt(v,1), rightFmt:v=>fmt(v,1)});
+      renderDualAxisMetricChart("memory-kv", data.history, nodeDefs, "memory_pressure", "kv_cache_usage", {left:"memory", right:"KV", leftMax:1, rightMax:1, leftFmt:pct, rightFmt:pct});
+      renderDualAxisMetricChart("io-disk", data.history, nodeDefs, "cpu_iowait", "disk_read_bps", {left:"iowait", right:"disk read/s", leftMax:1, leftFmt:pct, rightFmt:v=>`${bytes(v)}/s`});
+      renderNetworkInterfaceChart("network-ifaces", data.history, nodeDefs);
+      renderMultiMetricChart("proxy-activity", data.history, nodeDefs, [
+        {key:"proxy_request_rate", label:"proxy", color:"#60a5fa"},
+        {key:"proxy_chat_rate", label:"chat", color:"#36d399"},
+        {key:"proxy_web_search_rate", label:"search", color:"#fbbf24"},
+        {key:"proxy_5xx_rate", label:"5xx", color:"#fb7185"}
+      ], v=>fmt(v,2));
+      renderMultiMetricChart("request-outcomes", data.history, nodeDefs, [
+        {key:"request_stop_rate", label:"stop", color:"#36d399"},
+        {key:"request_length_rate", label:"length", color:"#fbbf24"},
+        {key:"error_rate", label:"error", color:"#fb7185"},
+        {key:"request_abort_rate", label:"abort", color:"#a78bfa"},
+        {key:"request_repetition_rate", label:"repeat", color:"#60a5fa"}
+      ], v=>fmt(v,2));
     }
     async function refresh() {
       try {
