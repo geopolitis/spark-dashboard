@@ -11,41 +11,65 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-PORT = int(os.environ.get("SPARK_DASHBOARD_PORT", "8090"))
-INTERVAL_SECONDS = int(os.environ.get("SPARK_DASHBOARD_INTERVAL", "15"))
-HISTORY_SECONDS = int(os.environ.get("SPARK_DASHBOARD_HISTORY", str(6 * 60 * 60)))
-LOCAL_NODE_ID = os.environ.get("LOCAL_NODE_ID", "local")
-LOCAL_NODE_LABEL = os.environ.get("LOCAL_NODE_LABEL", "Local node")
-LOCAL_NODE_HOST = os.environ.get("LOCAL_NODE_HOST", "127.0.0.1")
-LOCAL_NODE_SSH = os.environ.get("LOCAL_NODE_SSH", "")
-LOCAL_VLLM_URL = os.environ.get("LOCAL_VLLM_URL", "http://127.0.0.1:8080")
-LOCAL_PROXY_URL = os.environ.get("LOCAL_PROXY_URL", "http://127.0.0.1:8081")
-REMOTE_NODE_ID = os.environ.get("REMOTE_NODE_ID", "remote")
-REMOTE_NODE_LABEL = os.environ.get("REMOTE_NODE_LABEL", "Remote node")
-REMOTE_NODE_HOST = os.environ.get("REMOTE_NODE_HOST", "remote-host")
-REMOTE_NODE_SSH = os.environ.get("REMOTE_NODE_SSH", REMOTE_NODE_HOST)
-REMOTE_VLLM_URL = os.environ.get("REMOTE_VLLM_URL", f"http://{REMOTE_NODE_HOST}:8080")
-REMOTE_PROXY_URL = os.environ.get("REMOTE_PROXY_URL", f"http://{REMOTE_NODE_HOST}:8081")
+DEFAULTS = {
+    "SPARK_DASHBOARD_PORT": "8090",
+    "SPARK_DASHBOARD_INTERVAL": "15",
+    "SPARK_DASHBOARD_HISTORY": str(6 * 60 * 60),
+    "LOCAL_NODE_ID": "local",
+    "LOCAL_NODE_LABEL": "Local node",
+    "LOCAL_NODE_HOST": "127.0.0.1",
+    "LOCAL_NODE_SSH": "",
+    "LOCAL_VLLM_URL": "http://127.0.0.1:8080",
+    "LOCAL_PROXY_URL": "http://127.0.0.1:8081",
+    "REMOTE_NODE_ID": "remote",
+    "REMOTE_NODE_LABEL": "Remote node",
+    "REMOTE_NODE_HOST": "",
+    "REMOTE_NODE_SSH": "",
+    "REMOTE_VLLM_URL": "",
+    "REMOTE_PROXY_URL": "",
+}
+
+
+def config(name):
+    return os.environ.get(name, DEFAULTS[name])
+
+
+def endpoint_url(explicit, host, port):
+    if explicit:
+        return explicit
+    return f"http://{host}:{port}" if host else ""
+
+
+PORT = int(config("SPARK_DASHBOARD_PORT"))
+INTERVAL_SECONDS = int(config("SPARK_DASHBOARD_INTERVAL"))
+HISTORY_SECONDS = int(config("SPARK_DASHBOARD_HISTORY"))
 
 def build_nodes():
-    return [
+    remote_host = config("REMOTE_NODE_HOST")
+    remote_vllm_url = endpoint_url(config("REMOTE_VLLM_URL"), remote_host, 8080)
+    remote_proxy_url = endpoint_url(config("REMOTE_PROXY_URL"), remote_host, 8081)
+    nodes = [
         {
-            "id": LOCAL_NODE_ID,
-            "label": LOCAL_NODE_LABEL,
-            "host": LOCAL_NODE_HOST,
-            "ssh": LOCAL_NODE_SSH or None,
-            "vllm": [LOCAL_VLLM_URL],
-            "proxy": [LOCAL_PROXY_URL],
-        },
-        {
-            "id": REMOTE_NODE_ID,
-            "label": REMOTE_NODE_LABEL,
-            "host": REMOTE_NODE_HOST,
-            "ssh": REMOTE_NODE_SSH or None,
-            "vllm": [REMOTE_VLLM_URL],
-            "proxy": [REMOTE_PROXY_URL],
+            "id": config("LOCAL_NODE_ID"),
+            "label": config("LOCAL_NODE_LABEL"),
+            "host": config("LOCAL_NODE_HOST"),
+            "ssh": config("LOCAL_NODE_SSH") or None,
+            "vllm": [config("LOCAL_VLLM_URL")],
+            "proxy": [config("LOCAL_PROXY_URL")],
         },
     ]
+    if remote_host or remote_vllm_url or remote_proxy_url:
+        nodes.append(
+            {
+                "id": config("REMOTE_NODE_ID"),
+                "label": config("REMOTE_NODE_LABEL"),
+                "host": remote_host,
+                "ssh": config("REMOTE_NODE_SSH") or remote_host or None,
+                "vllm": [remote_vllm_url] if remote_vllm_url else [],
+                "proxy": [remote_proxy_url] if remote_proxy_url else [],
+            }
+        )
+    return nodes
 
 
 NODES = build_nodes()

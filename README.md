@@ -2,7 +2,7 @@
 
 Failure-tolerant dashboard for a two-node NVIDIA Spark/vLLM deployment.
 
-The dashboard monitors local and remote services without assuming specific hostnames. Configure node labels, SSH targets, vLLM endpoints, proxy endpoints, and sampling windows in `.env`.
+The dashboard monitors local and remote services without assuming specific hostnames. The Python file contains safe defaults; `.env` should only contain values you want to override.
 
 ## Files
 
@@ -15,40 +15,39 @@ The dashboard monitors local and remote services without assuming specific hostn
 
 ## Configuration
 
-Copy the template and edit it for your environment:
+Copy the template and edit only the values that differ from the defaults:
 
 ```bash
 cp .env.example .env
 ```
 
-Key variables:
+Common overrides:
+
+```bash
+REMOTE_NODE_HOST=remote-host
+REMOTE_NODE_SSH=remote-host
+REMOTE_NODE_LABEL=Remote node
+```
+
+Useful optional overrides:
 
 ```bash
 SPARK_DASHBOARD_PORT=8090
 SPARK_DASHBOARD_INTERVAL=15
 SPARK_DASHBOARD_HISTORY=21600
 
-LOCAL_NODE_ID=local
 LOCAL_NODE_LABEL=Local node
-LOCAL_NODE_HOST=127.0.0.1
-LOCAL_NODE_SSH=
 LOCAL_VLLM_URL=http://127.0.0.1:8080
 LOCAL_PROXY_URL=http://127.0.0.1:8081
 
-REMOTE_NODE_ID=remote
-REMOTE_NODE_LABEL=Remote node
-REMOTE_NODE_HOST=remote-host
-REMOTE_NODE_SSH=remote-host
 REMOTE_VLLM_URL=http://remote-host:8080
 REMOTE_PROXY_URL=http://remote-host:8081
-```
 
-Deploy helper variables:
-
-```bash
 DASHBOARD_DEPLOY_HOST=dashboard-host
 DASHBOARD_DEPLOY_DIR=/home/user/dashboard
 ```
+
+When `REMOTE_VLLM_URL` or `REMOTE_PROXY_URL` are omitted, they are derived from `REMOTE_NODE_HOST` using ports `8080` and `8081`.
 
 ## Run
 
