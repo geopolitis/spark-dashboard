@@ -843,8 +843,7 @@ INDEX_HTML = r"""<!doctype html>
       <div class="panel"><h2 class="metric-tip" data-tip="CPU time waiting on disk or device I/O from /proc/stat deltas.">IOwait - 24h</h2><svg class="chart" id="iowait"></svg></div>
       <div class="panel"><h2 class="metric-tip" data-tip="Speculative decoding acceptance ratio from vLLM draft and accepted token counters, when exported.">DFlash Acceptance - 24h</h2><svg class="chart" id="acceptance"></svg></div>
       <div class="panel"><h2 class="metric-tip" data-tip="vLLM request error rate calculated from request_success_total with finished_reason=error.">Error Rate - 24h</h2><svg class="chart" id="errors"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="Estimated vLLM read bandwidth per second derived from vLLM counters.">vLLM Read Bytes/s - 24h</h2><svg class="chart" id="vllm-read"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="Estimated vLLM write bandwidth per second derived from vLLM counters.">vLLM Write Bytes/s - 24h</h2><svg class="chart" id="vllm-write"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="Combined vLLM read and write bandwidth per second. Left axis is read bytes/s; right axis is write bytes/s; bottom axis is time.">vLLM Read / Write Bytes/s - 24h</h2><svg class="chart large" id="vllm-bandwidth"></svg></div>
     </section>
   </main>
   <script>
@@ -983,6 +982,70 @@ INDEX_HTML = r"""<!doctype html>
       `;
       svg.innerHTML = html;
     }
+    function renderVllmBandwidthChart(id, history, nodeDefs) {
+      const svg = document.getElementById(id);
+      if (!svg) return;
+      history = Array.isArray(history) ? history : [];
+      const W = 760, H = 260, L = 66, R = 72, T = 20, B = 42;
+      svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+      const minT = history[0]?.t || Date.now() - 1, maxT = history[history.length - 1]?.t || Date.now();
+      const nodes = (nodeDefs || []).map((node, idx) => ({
+        id: node.id,
+        label: node.label || node.id,
+        dash: idx === 0 ? "" : "5 4",
+        alpha: idx === 0 ? 1 : .95,
+      }));
+      const readColor = "#60a5fa";
+      const writeColor = "#fbbf24";
+      const readValues = [];
+      const writeValues = [];
+      for (const h of history) {
+        for (const node of nodes) {
+          const sample = h.nodes?.[node.id] || {};
+          if (sample.vllm_read_bps !== null && sample.vllm_read_bps !== undefined) readValues.push(sample.vllm_read_bps);
+          if (sample.vllm_write_bps !== null && sample.vllm_write_bps !== undefined) writeValues.push(sample.vllm_write_bps);
+        }
+      }
+      const maxRead = Math.max(...readValues, 1);
+      const maxWrite = Math.max(...writeValues, 1);
+      const x = t => L + ((t - minT) / Math.max(maxT - minT, 1)) * (W - L - R);
+      const yRead = v => H - B - (Number(v || 0) / maxRead) * (H - T - B);
+      const yWrite = v => H - B - (Number(v || 0) / maxWrite) * (H - T - B);
+      const pathFor = (node, metric, yFn) => {
+        const pts = history.map(h => ({t:h.t, v:h.nodes?.[node]?.[metric]})).filter(p => p.v !== null && p.v !== undefined);
+        return pts.map((p,i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)},${yFn(p.v).toFixed(1)}`).join(" ");
+      };
+      let html = `
+        <line x1="${L}" y1="${T}" x2="${L}" y2="${H-B}" stroke="#31445b"/>
+        <line x1="${W-R}" y1="${T}" x2="${W-R}" y2="${H-B}" stroke="#31445b"/>
+        <line x1="${L}" y1="${H-B}" x2="${W-R}" y2="${H-B}" stroke="#31445b"/>
+      `;
+      for (let i=0; i<=4; i++) {
+        const yy = T + (i / 4) * (H - T - B);
+        const readVal = maxRead * (4 - i) / 4;
+        const writeVal = maxWrite * (4 - i) / 4;
+        html += `<line x1="${L}" y1="${yy}" x2="${W-R}" y2="${yy}" stroke="#172232"/>`;
+        html += `<text x="4" y="${yy+3}" fill="${readColor}">${bytes(readVal)}/s</text>`;
+        html += `<text x="${W-R+6}" y="${yy+3}" fill="${writeColor}">${bytes(writeVal)}/s</text>`;
+      }
+      html += `
+        <text x="${L}" y="${H-12}">${new Date(minT).toLocaleTimeString()}</text>
+        <text x="${W-R-72}" y="${H-12}">${new Date(maxT).toLocaleTimeString()}</text>
+      `;
+      for (const node of nodes) {
+        const readPath = pathFor(node.id, "vllm_read_bps", yRead);
+        const writePath = pathFor(node.id, "vllm_write_bps", yWrite);
+        if (readPath) html += `<path d="${readPath}" fill="none" stroke="${readColor}" stroke-width="2" stroke-dasharray="${node.dash}" opacity="${node.alpha}"/>`;
+        if (writePath) html += `<path d="${writePath}" fill="none" stroke="${writeColor}" stroke-width="2" stroke-dasharray="${node.dash}" opacity="${node.alpha}"/>`;
+      }
+      html += `
+        <text x="${L+6}" y="${T+14}" fill="${readColor}">read B/s</text>
+        <text x="${L+78}" y="${T+14}" fill="${writeColor}">write B/s</text>
+        <text x="${W-R-138}" y="${T+14}">solid ${esc(nodes[0]?.label || "node 1")}</text>
+        <text x="${W-R-138}" y="${T+30}">dashed ${esc(nodes[1]?.label || "node 2")}</text>
+      `;
+      svg.innerHTML = html;
+    }
     function render(data) {
       data = data || {};
       data.nodes = data.nodes || {};
@@ -1102,8 +1165,7 @@ INDEX_HTML = r"""<!doctype html>
       renderChart("iowait", data.history, "cpu_iowait", 1, nodeDefs);
       renderChart("acceptance", data.history, "acceptance_rate", 1, nodeDefs);
       renderChart("errors", data.history, "error_rate", 1, nodeDefs);
-      renderChart("vllm-read", data.history, "vllm_read_bps", 1, nodeDefs);
-      renderChart("vllm-write", data.history, "vllm_write_bps", 1, nodeDefs);
+      renderVllmBandwidthChart("vllm-bandwidth", data.history, nodeDefs);
     }
     async function refresh() {
       try {
