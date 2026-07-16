@@ -14,6 +14,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PORT = int(os.environ.get("SPARK_DASHBOARD_PORT", "8090"))
 INTERVAL_SECONDS = int(os.environ.get("SPARK_DASHBOARD_INTERVAL", "15"))
 HISTORY_SECONDS = int(os.environ.get("SPARK_DASHBOARD_HISTORY", str(6 * 60 * 60)))
+TOULA_VLLM_URL = os.environ.get("TOULA_VLLM_URL", "http://127.0.0.1:8080")
+TOULA_PROXY_URL = os.environ.get("TOULA_PROXY_URL", "http://127.0.0.1:8081")
+TOULA_REMOTE_VLLM_URL = os.environ.get("TOULA_REMOTE_VLLM_URL", "http://10.10.10.1:8080")
+TOULA_REMOTE_PROXY_URL = os.environ.get("TOULA_REMOTE_PROXY_URL", "http://10.10.10.1:8081")
+KOULA_VLLM_URL = os.environ.get("KOULA_VLLM_URL", "http://127.0.0.1:8080")
+KOULA_PROXY_URL = os.environ.get("KOULA_PROXY_URL", "http://127.0.0.1:8081")
+KOULA_REMOTE_VLLM_URL = os.environ.get("KOULA_REMOTE_VLLM_URL", "http://10.10.10.2:8080")
+KOULA_REMOTE_PROXY_URL = os.environ.get("KOULA_REMOTE_PROXY_URL", "http://10.10.10.2:8081")
+TOULA_REMOTE_HOST = os.environ.get("TOULA_REMOTE_HOST", "10.10.10.1")
+KOULA_REMOTE_HOST = os.environ.get("KOULA_REMOTE_HOST", "10.10.10.2")
 
 def build_nodes():
     hostname = socket.gethostname().split(".")[0].lower()
@@ -24,16 +34,16 @@ def build_nodes():
                 "label": "Toula",
                 "host": "127.0.0.1",
                 "ssh": None,
-                "vllm": ["http://127.0.0.1:8080"],
-                "proxy": ["http://127.0.0.1:8081"],
+                "vllm": [TOULA_VLLM_URL],
+                "proxy": [TOULA_PROXY_URL],
             },
             {
                 "id": "koula",
                 "label": "Koula",
-                "host": "10.10.10.2",
-                "ssh": "10.10.10.2",
-                "vllm": ["http://10.10.10.2:8080"],
-                "proxy": ["http://10.10.10.2:8081"],
+                "host": KOULA_REMOTE_HOST,
+                "ssh": KOULA_REMOTE_HOST,
+                "vllm": [KOULA_REMOTE_VLLM_URL],
+                "proxy": [KOULA_REMOTE_PROXY_URL],
             },
         ]
     return [
@@ -42,16 +52,16 @@ def build_nodes():
             "label": "Koula",
             "host": "127.0.0.1",
             "ssh": None,
-            "vllm": ["http://127.0.0.1:8080"],
-            "proxy": ["http://127.0.0.1:8081"],
+            "vllm": [KOULA_VLLM_URL],
+            "proxy": [KOULA_PROXY_URL],
         },
         {
             "id": "toula",
             "label": "Toula",
-            "host": "10.10.10.1",
-            "ssh": "10.10.10.1",
-            "vllm": ["http://10.10.10.1:8080"],
-            "proxy": ["http://10.10.10.1:8081"],
+            "host": TOULA_REMOTE_HOST,
+            "ssh": TOULA_REMOTE_HOST,
+            "vllm": [TOULA_REMOTE_VLLM_URL],
+            "proxy": [TOULA_REMOTE_PROXY_URL],
         },
     ]
 

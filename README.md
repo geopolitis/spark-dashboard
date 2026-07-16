@@ -7,6 +7,8 @@ Failure-tolerant dashboard for the Toula/Koula NVIDIA Spark nodes.
 - `spark_dashboard_resilient.py` - single-file dashboard server.
 - `start_spark_dashboard_resilient.sh` - restart helper used on Toula.
 - `deploy_to_toula.sh` - copies these files to `/home/geo/Gemini` on Toula and restarts the dashboard.
+- `.env` - endpoint, port, interval, and history configuration.
+- `requirements.txt` - Python dependency file. The dashboard currently uses only the standard library.
 
 ## Current Ports
 
@@ -22,6 +24,8 @@ Failure-tolerant dashboard for the Toula/Koula NVIDIA Spark nodes.
 cd /home/geo/Gemini
 ./start_spark_dashboard_resilient.sh
 ```
+
+The start script loads `/home/geo/Gemini/.env` when present.
 
 ## Deploy From This Folder
 

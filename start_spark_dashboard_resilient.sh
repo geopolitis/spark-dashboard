@@ -3,6 +3,13 @@ set -euo pipefail
 
 cd /home/geo/Gemini
 
+if [[ -f /home/geo/Gemini/.env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source /home/geo/Gemini/.env
+  set +a
+fi
+
 ps -eo pid=,args= |
   awk '$2 == "python3" && $3 == "/home/geo/Gemini/spark_dashboard_resilient.py" {print $1}' |
   while read -r pid; do
