@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 DEFAULTS = {
     "SPARK_DASHBOARD_PORT": "8090",
     "SPARK_DASHBOARD_INTERVAL": "15",
-    "SPARK_DASHBOARD_HISTORY": str(6 * 60 * 60),
+    "SPARK_DASHBOARD_HISTORY": str(24 * 60 * 60),
     "LOCAL_NODE_ID": "local",
     "LOCAL_NODE_LABEL": "Local node",
     "LOCAL_NODE_HOST": "127.0.0.1",
@@ -722,19 +722,19 @@ INDEX_HTML = r"""<!doctype html>
     <section class="cards" id="cards"></section>
     <section class="grid" id="nodes"></section>
     <section class="grid">
-      <div class="panel"><h2 class="metric-tip" title="Output-token generation rate over the retained history window.">Generation TPS - 6h</h2><svg class="chart" id="throughput"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="Prompt/input token processing rate over the retained history window.">Prompt TPS - 6h</h2><svg class="chart" id="prompt-throughput"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="Combined prompt plus generation token throughput.">Total Token TPS - 6h</h2><svg class="chart" id="total-throughput"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="vLLM KV cache occupancy percentage. High values can increase queueing or preemptions.">KV Cache - 6h</h2><svg class="chart" id="kv"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="GPU core temperature in Celsius from nvidia-smi.">GPU Temperature - 6h</h2><svg class="chart" id="gpu-temp"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="GPU power draw in watts from nvidia-smi.">GPU Power - 6h</h2><svg class="chart" id="gpu-power"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="Combined chart with temperature, power and GPU utilization; dashed line is the peer node.">GPU Temp / Power / Util - 6h</h2><svg class="chart large" id="gpu-combined"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="CPU non-idle time calculated from /proc/stat deltas.">CPU Busy - 6h</h2><svg class="chart" id="cpu"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="CPU time waiting on disk or device I/O from /proc/stat deltas.">IOwait - 6h</h2><svg class="chart" id="iowait"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="Speculative decoding acceptance ratio from vLLM draft and accepted token counters, when exported.">DFlash Acceptance - 6h</h2><svg class="chart" id="acceptance"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="vLLM request error rate calculated from request_success_total with finished_reason=error.">Error Rate - 6h</h2><svg class="chart" id="errors"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="Estimated vLLM read bandwidth per second derived from vLLM counters.">vLLM Read Bytes/s - 6h</h2><svg class="chart" id="vllm-read"></svg></div>
-      <div class="panel"><h2 class="metric-tip" title="Estimated vLLM write bandwidth per second derived from vLLM counters.">vLLM Write Bytes/s - 6h</h2><svg class="chart" id="vllm-write"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="Output-token generation rate over the retained history window.">Generation TPS - 24h</h2><svg class="chart" id="throughput"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="Prompt/input token processing rate over the retained history window.">Prompt TPS - 24h</h2><svg class="chart" id="prompt-throughput"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="Combined prompt plus generation token throughput.">Total Token TPS - 24h</h2><svg class="chart" id="total-throughput"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="vLLM KV cache occupancy percentage. High values can increase queueing or preemptions.">KV Cache - 24h</h2><svg class="chart" id="kv"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="GPU core temperature in Celsius from nvidia-smi.">GPU Temperature - 24h</h2><svg class="chart" id="gpu-temp"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="GPU power draw in watts from nvidia-smi.">GPU Power - 24h</h2><svg class="chart" id="gpu-power"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="Combined chart with temperature, power and GPU utilization; dashed line is the peer node.">GPU Temp / Power / Util - 24h</h2><svg class="chart large" id="gpu-combined"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="CPU non-idle time calculated from /proc/stat deltas.">CPU Busy - 24h</h2><svg class="chart" id="cpu"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="CPU time waiting on disk or device I/O from /proc/stat deltas.">IOwait - 24h</h2><svg class="chart" id="iowait"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="Speculative decoding acceptance ratio from vLLM draft and accepted token counters, when exported.">DFlash Acceptance - 24h</h2><svg class="chart" id="acceptance"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="vLLM request error rate calculated from request_success_total with finished_reason=error.">Error Rate - 24h</h2><svg class="chart" id="errors"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="Estimated vLLM read bandwidth per second derived from vLLM counters.">vLLM Read Bytes/s - 24h</h2><svg class="chart" id="vllm-read"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="Estimated vLLM write bandwidth per second derived from vLLM counters.">vLLM Write Bytes/s - 24h</h2><svg class="chart" id="vllm-write"></svg></div>
     </section>
   </main>
   <script>
