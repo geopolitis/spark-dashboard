@@ -954,6 +954,10 @@ INDEX_HTML = r"""<!doctype html>
     .chart.large { height: 260px; }
     .chart text { fill: var(--muted); font-size: 10px; }
     .chart path, .chart line { vector-effect: non-scaling-stroke; }
+    .chart-category { display: grid; gap: 12px; }
+    .category-head { display:flex; justify-content:space-between; gap:16px; align-items:flex-end; padding: 2px 2px 0; }
+    .category-head h2 { margin: 0; font-size: 18px; }
+    .category-head p { margin: 3px 0 0; color: var(--muted); font-size: 12px; line-height: 1.35; }
     .chart-head { margin-bottom: 10px; }
     .chart-head h2 { margin: 0 0 4px; font-size: 16px; }
     .chart-head p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.35; }
@@ -975,29 +979,70 @@ INDEX_HTML = r"""<!doctype html>
   <main>
     <section class="cards" id="cards"></section>
     <section class="grid" id="nodes"></section>
-    <section class="grid">
-      <div class="panel"><div class="chart-head"><h2>Generation TPS - 24h</h2><p>rising output TPS means decode is active; persistently low values during requests point to model/kernel bottlenecks or oversized context. Metrics: <code>generation_tps</code>.</p></div><svg class="chart" id="throughput"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>Prompt TPS - 24h</h2><p>spikes mean prefill/context ingestion. If prompt TPS dominates generation TPS, reduce prompt size, improve prefix cache reuse, or lower concurrency. Metrics: <code>prompt_tps</code>.</p></div><svg class="chart" id="prompt-throughput"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>Total Token TPS - 24h</h2><p>total throughput should rise under load. If requests are active and this stays flat, check queue, KV cache, and GPU utilization. Metrics: <code>total_tps</code>.</p></div><svg class="chart" id="total-throughput"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>KV Cache - 24h</h2><p>high KV cache means context/concurrency pressure. If it approaches 1.0, reduce max context/concurrency or raise available GPU memory. Metrics: <code>kv_cache_usage</code>.</p></div><svg class="chart" id="kv"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>Context Window Usage - 24h</h2><p>p95 near the max context means agents are sending huge prompts; expect higher TTFT and cache pressure. Consider compaction or lower max output. Metrics: <code>context_usage_p95</code>, <code>context_prompt_p95_tokens</code>.</p></div><svg class="chart large" id="context-usage"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>GPU Temperature - 24h</h2><p>rising temperature under load is normal; sustained high temperature can throttle clocks. Improve cooling if temperature climbs while TPS drops. Metrics: <code>gpu_temp_c</code>.</p></div><svg class="chart" id="gpu-temp"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>GPU Power - 24h</h2><p>power rising with TPS means GPU work is happening; low power during requests suggests CPU, I/O, queue, or scheduler bottleneck. Metrics: <code>gpu_power_w</code>.</p></div><svg class="chart" id="gpu-power"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>GPU Temp / Power / Util - 24h</h2><p>healthy load shows utilization and power moving together. High temperature with low utilization suggests cooling or background load; low utilization with queues suggests serving bottlenecks. Metrics: <code>gpu_temp_c</code>, <code>gpu_power_w</code>, <code>gpu_util_pct</code>.</p></div><svg class="chart large" id="gpu-combined"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>CPU Busy - 24h</h2><p>CPU spikes are normal for orchestration; sustained high CPU with low GPU utilization means host-side overhead may be limiting vLLM. Metrics: <code>cpu_busy</code>.</p></div><svg class="chart" id="cpu"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>IOwait - 24h</h2><p>low IOwait is good. If IOwait rises during inference, disk, swap, or model loading is stalling the host. Metrics: <code>cpu_iowait</code>.</p></div><svg class="chart" id="iowait"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>DFlash Acceptance - 24h</h2><p>higher acceptance means speculative tokens are useful; low acceptance means draft work is wasted and may hurt throughput. Metrics: <code>acceptance_rate</code>.</p></div><svg class="chart" id="acceptance"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>Error Rate - 24h</h2><p>should stay at zero. Any rise means failed vLLM requests; check context overflow, backend errors, and client timeouts. Metrics: <code>error_rate</code>.</p></div><svg class="chart" id="errors"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>vLLM Prefill Compute / Cache Tokens/s - 24h</h2><p>cache-hit tokens are cheap; compute tokens are expensive. If compute dominates for repeated agent work, improve prompt reuse or prefix caching. Metrics: <code>prefill_compute_tps</code>, <code>prefill_cache_hit_tps</code>.</p></div><svg class="chart large" id="vllm-prefill-source"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>Prefix Cache Efficiency - 24h</h2><p>higher hit rate is good. Low hit rate with repeated workflows means prompts are changing too much or cache is being evicted. Metrics: <code>prefix_hit_rate</code>, <code>prefill_cache_hit_tps</code>.</p></div><svg class="chart large" id="prefix-efficiency"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>TTFT p95 / p50 - 24h</h2><p>p95 should stay close to p50. If p95 climbs, large prompts, queueing, or KV pressure are causing slow first tokens. Metrics: <code>ttft_p95_s</code>, <code>ttft_p50_s</code>.</p></div><svg class="chart large" id="ttft-latency"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>Queue Pressure - 24h</h2><p>waiting should usually be zero. If waiting grows, lower concurrency, reduce max tokens/context, or increase serving capacity. Metrics: <code>requests_running</code>, <code>requests_waiting</code>.</p></div><svg class="chart large" id="queue-pressure"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>Prompt vs Generation TPS - 24h</h2><p>prompt-heavy workloads are context-bound; generation-heavy workloads are decode-bound. Use this to decide whether to optimize cache/context or decode throughput. Metrics: <code>prompt_tps</code>, <code>generation_tps</code>.</p></div><svg class="chart large" id="prompt-generation"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>Memory Pressure / KV Cache - 24h</h2><p>high host memory plus high KV cache means you are close to pressure. Reduce context/concurrency or increase memory headroom. Metrics: <code>memory_pressure</code>, <code>kv_cache_usage</code>.</p></div><svg class="chart large" id="memory-kv"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>IOwait / Disk I/O - 24h</h2><p>disk traffic is fine during startup, but high IOwait during requests suggests swap or storage bottlenecks. Metrics: <code>cpu_iowait</code>, <code>disk_read_bps</code>.</p></div><svg class="chart large" id="io-disk"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>Network Interfaces - 24h</h2><p>IB/bond traffic should carry node-to-node work; Wi-Fi traffic should mostly be API/proxy/dashboard. Unexpected Wi-Fi spikes may mean traffic is not using IB. Metrics: per-interface RX+TX bytes/s.</p></div><svg class="chart large" id="network-ifaces"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>Proxy Activity / Errors - 24h</h2><p>request/search rates show tool and internet use. 5xx/backend errors should stay zero; if they rise, inspect proxy backend and internet path. Metrics: <code>proxy_request_rate</code>, <code>proxy_chat_rate</code>, <code>proxy_web_search_rate</code>, <code>proxy_5xx_rate</code>.</p></div><svg class="chart large" id="proxy-activity"></svg></div>
-      <div class="panel"><div class="chart-head"><h2>Request Outcomes - 24h</h2><p>stop is healthy. Length means max tokens truncation; error/abort/repetition need investigation. Metrics: <code>request_stop_rate</code>, <code>request_length_rate</code>, <code>error_rate</code>, <code>request_abort_rate</code>.</p></div><svg class="chart large" id="request-outcomes"></svg></div>
+    <section class="chart-category">
+      <div class="category-head">
+        <div>
+          <h2>vLLM Serving</h2>
+          <p>Token throughput, context pressure, cache behavior, latency, queueing, and request outcomes.</p>
+        </div>
+      </div>
+      <div class="grid">
+        <div class="panel"><div class="chart-head"><h2>Generation TPS - 24h</h2><p>rising output TPS means decode is active; persistently low values during requests point to model/kernel bottlenecks or oversized context. Metrics: <code>generation_tps</code>.</p></div><svg class="chart" id="throughput"></svg></div>
+        <div class="panel"><div class="chart-head"><h2>Prompt TPS - 24h</h2><p>spikes mean prefill/context ingestion. If prompt TPS dominates generation TPS, reduce prompt size, improve prefix cache reuse, or lower concurrency. Metrics: <code>prompt_tps</code>.</p></div><svg class="chart" id="prompt-throughput"></svg></div>
+        <div class="panel"><div class="chart-head"><h2>Total Token TPS - 24h</h2><p>total throughput should rise under load. If requests are active and this stays flat, check queue, KV cache, and GPU utilization. Metrics: <code>total_tps</code>.</p></div><svg class="chart" id="total-throughput"></svg></div>
+        <div class="panel"><div class="chart-head"><h2>KV Cache - 24h</h2><p>high KV cache means context/concurrency pressure. If it approaches 1.0, reduce max context/concurrency or raise available GPU memory. Metrics: <code>kv_cache_usage</code>.</p></div><svg class="chart" id="kv"></svg></div>
+        <div class="panel"><div class="chart-head"><h2>Context Window Usage - 24h</h2><p>p95 near the max context means agents are sending huge prompts; expect higher TTFT and cache pressure. Consider compaction or lower max output. Metrics: <code>context_usage_p95</code>, <code>context_prompt_p95_tokens</code>.</p></div><svg class="chart large" id="context-usage"></svg></div>
+        <div class="panel"><div class="chart-head"><h2>vLLM Prefill Compute / Cache Tokens/s - 24h</h2><p>cache-hit tokens are cheap; compute tokens are expensive. If compute dominates for repeated agent work, improve prompt reuse or prefix caching. Metrics: <code>prefill_compute_tps</code>, <code>prefill_cache_hit_tps</code>.</p></div><svg class="chart large" id="vllm-prefill-source"></svg></div>
+        <div class="panel"><div class="chart-head"><h2>Prefix Cache Efficiency - 24h</h2><p>higher hit rate is good. Low hit rate with repeated workflows means prompts are changing too much or cache is being evicted. Metrics: <code>prefix_hit_rate</code>, <code>prefill_cache_hit_tps</code>.</p></div><svg class="chart large" id="prefix-efficiency"></svg></div>
+        <div class="panel"><div class="chart-head"><h2>TTFT p95 / p50 - 24h</h2><p>p95 should stay close to p50. If p95 climbs, large prompts, queueing, or KV pressure are causing slow first tokens. Metrics: <code>ttft_p95_s</code>, <code>ttft_p50_s</code>.</p></div><svg class="chart large" id="ttft-latency"></svg></div>
+        <div class="panel"><div class="chart-head"><h2>Queue Pressure - 24h</h2><p>waiting should usually be zero. If waiting grows, lower concurrency, reduce max tokens/context, or increase serving capacity. Metrics: <code>requests_running</code>, <code>requests_waiting</code>.</p></div><svg class="chart large" id="queue-pressure"></svg></div>
+        <div class="panel"><div class="chart-head"><h2>Prompt vs Generation TPS - 24h</h2><p>prompt-heavy workloads are context-bound; generation-heavy workloads are decode-bound. Use this to decide whether to optimize cache/context or decode throughput. Metrics: <code>prompt_tps</code>, <code>generation_tps</code>.</p></div><svg class="chart large" id="prompt-generation"></svg></div>
+        <div class="panel"><div class="chart-head"><h2>DFlash Acceptance - 24h</h2><p>higher acceptance means speculative tokens are useful; low acceptance means draft work is wasted and may hurt throughput. Metrics: <code>acceptance_rate</code>.</p></div><svg class="chart" id="acceptance"></svg></div>
+        <div class="panel"><div class="chart-head"><h2>Error Rate - 24h</h2><p>should stay at zero. Any rise means failed vLLM requests; check context overflow, backend errors, and client timeouts. Metrics: <code>error_rate</code>.</p></div><svg class="chart" id="errors"></svg></div>
+        <div class="panel"><div class="chart-head"><h2>Request Outcomes - 24h</h2><p>stop is healthy. Length means max tokens truncation; error/abort/repetition need investigation. Metrics: <code>request_stop_rate</code>, <code>request_length_rate</code>, <code>error_rate</code>, <code>request_abort_rate</code>.</p></div><svg class="chart large" id="request-outcomes"></svg></div>
+      </div>
+    </section>
+
+    <section class="chart-category">
+      <div class="category-head">
+        <div>
+          <h2>OS / Hardware</h2>
+          <p>Host CPU, memory, GPU thermals, GPU power, and storage pressure.</p>
+        </div>
+      </div>
+      <div class="grid">
+        <div class="panel"><div class="chart-head"><h2>GPU Temperature - 24h</h2><p>rising temperature under load is normal; sustained high temperature can throttle clocks. Improve cooling if temperature climbs while TPS drops. Metrics: <code>gpu_temp_c</code>.</p></div><svg class="chart" id="gpu-temp"></svg></div>
+        <div class="panel"><div class="chart-head"><h2>GPU Power - 24h</h2><p>power rising with TPS means GPU work is happening; low power during requests suggests CPU, I/O, queue, or scheduler bottleneck. Metrics: <code>gpu_power_w</code>.</p></div><svg class="chart" id="gpu-power"></svg></div>
+        <div class="panel"><div class="chart-head"><h2>GPU Temp / Power / Util - 24h</h2><p>healthy load shows utilization and power moving together. High temperature with low utilization suggests cooling or background load; low utilization with queues suggests serving bottlenecks. Metrics: <code>gpu_temp_c</code>, <code>gpu_power_w</code>, <code>gpu_util_pct</code>.</p></div><svg class="chart large" id="gpu-combined"></svg></div>
+        <div class="panel"><div class="chart-head"><h2>CPU Busy - 24h</h2><p>CPU spikes are normal for orchestration; sustained high CPU with low GPU utilization means host-side overhead may be limiting vLLM. Metrics: <code>cpu_busy</code>.</p></div><svg class="chart" id="cpu"></svg></div>
+        <div class="panel"><div class="chart-head"><h2>IOwait - 24h</h2><p>low IOwait is good. If IOwait rises during inference, disk, swap, or model loading is stalling the host. Metrics: <code>cpu_iowait</code>.</p></div><svg class="chart" id="iowait"></svg></div>
+        <div class="panel"><div class="chart-head"><h2>Memory Pressure / KV Cache - 24h</h2><p>high host memory plus high KV cache means you are close to pressure. Reduce context/concurrency or increase memory headroom. Metrics: <code>memory_pressure</code>, <code>kv_cache_usage</code>.</p></div><svg class="chart large" id="memory-kv"></svg></div>
+        <div class="panel"><div class="chart-head"><h2>IOwait / Disk I/O - 24h</h2><p>disk traffic is fine during startup, but high IOwait during requests suggests swap or storage bottlenecks. Metrics: <code>cpu_iowait</code>, <code>disk_read_bps</code>.</p></div><svg class="chart large" id="io-disk"></svg></div>
+      </div>
+    </section>
+
+    <section class="chart-category">
+      <div class="category-head">
+        <div>
+          <h2>Network</h2>
+          <p>Interface traffic for API, dashboard, Wi-Fi, and node-to-node paths.</p>
+        </div>
+      </div>
+      <div class="grid">
+        <div class="panel"><div class="chart-head"><h2>Network Interfaces - 24h</h2><p>IB/bond traffic should carry node-to-node work; Wi-Fi traffic should mostly be API/proxy/dashboard. Unexpected Wi-Fi spikes may mean traffic is not using IB. Metrics: per-interface RX+TX bytes/s.</p></div><svg class="chart large" id="network-ifaces"></svg></div>
+      </div>
+    </section>
+
+    <section class="chart-category">
+      <div class="category-head">
+        <div>
+          <h2>Proxy / Internet Access</h2>
+          <p>Proxy request mix, web-search activity, and upstream/backend failure rate.</p>
+        </div>
+      </div>
+      <div class="grid">
+        <div class="panel"><div class="chart-head"><h2>Proxy Activity / Errors - 24h</h2><p>request/search rates show tool and internet use. 5xx/backend errors should stay zero; if they rise, inspect proxy backend and internet path. Metrics: <code>proxy_request_rate</code>, <code>proxy_chat_rate</code>, <code>proxy_web_search_rate</code>, <code>proxy_5xx_rate</code>.</p></div><svg class="chart large" id="proxy-activity"></svg></div>
+      </div>
     </section>
   </main>
   <script>
