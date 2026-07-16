@@ -156,6 +156,42 @@ def parse_sum(text, pattern):
     return sum(values) if values else None
 
 
+def parse_histogram(text, metric):
+    buckets = {}
+    for le, value in re.findall(rf'^{re.escape(metric)}_bucket\{{[^}}]*le="([^"]+)"[^}}]*\}}\s+([0-9.eE+-]+)', text, re.MULTILINE):
+        boundary = float("inf") if le == "+Inf" else float(le)
+        buckets[boundary] = buckets.get(boundary, 0.0) + float(value)
+    count = parse_sum(text, rf'^{re.escape(metric)}_count\{{[^}}]*\}}\s+([0-9.eE+-]+)')
+    total = parse_sum(text, rf'^{re.escape(metric)}_sum\{{[^}}]*\}}\s+([0-9.eE+-]+)')
+    if not buckets and count is None and total is None:
+        return None
+    return {"buckets": buckets, "count": count or buckets.get(float("inf")), "sum": total}
+
+
+def histogram_quantile(histogram, quantile):
+    if not histogram or not histogram.get("buckets"):
+        return None
+    buckets = sorted(histogram["buckets"].items(), key=lambda item: item[0])
+    total = histogram.get("count") or buckets[-1][1]
+    if not total or total <= 0:
+        return None
+    target = total * quantile
+    prev_le = 0.0
+    prev_count = 0.0
+    for le, count in buckets:
+        if count >= target:
+            if le == float("inf"):
+                return prev_le if prev_le > 0 else None
+            bucket_count = count - prev_count
+            if bucket_count <= 0:
+                return le
+            fraction = (target - prev_count) / bucket_count
+            return prev_le + (le - prev_le) * fraction
+        prev_le = le
+        prev_count = count
+    return None
+
+
 def parse_vllm_metrics(text):
     generation = parse_sum(text, r'^vllm:generation_tokens_total\{[^}]*\}\s+([0-9.eE+-]+)')
     prompt = parse_sum(text, r'^vllm:prompt_tokens_total\{[^}]*\}\s+([0-9.eE+-]+)')
@@ -172,6 +208,7 @@ def parse_vllm_metrics(text):
     draft = parse_sum(text, r'^vllm:spec_decode_num_draft_tokens_total\{[^}]*\}\s+([0-9.eE+-]+)')
     accepted = parse_sum(text, r'^vllm:spec_decode_num_accepted_tokens_total\{[^}]*\}\s+([0-9.eE+-]+)')
     errors = parse_sum(text, r'^vllm:request_success_total\{[^}]*finished_reason="error"[^}]*\}\s+([0-9.eE+-]+)') or 0.0
+    ttft = parse_histogram(text, "vllm:time_to_first_token_seconds")
     acceptance = None
     if draft and draft > 0 and accepted is not None:
         acceptance = accepted / draft
@@ -197,6 +234,10 @@ def parse_vllm_metrics(text):
         "accepted_tokens": accepted,
         "acceptance_rate": acceptance,
         "request_errors": errors,
+        "ttft_count": ttft.get("count") if ttft else None,
+        "ttft_avg_s": (ttft.get("sum") / ttft.get("count")) if ttft and ttft.get("sum") is not None and ttft.get("count") else None,
+        "ttft_p50_s": histogram_quantile(ttft, 0.50),
+        "ttft_p95_s": histogram_quantile(ttft, 0.95),
     }
 
 
@@ -419,6 +460,10 @@ def derive_sample(nodes, previous):
         accepted = None
         draft = None
         errors = 0.0
+        ttft_count = 0.0
+        ttft_sum = 0.0
+        ttft_p50 = None
+        ttft_p95 = None
         for item in node.get("vllm", []):
             metrics = item.get("metrics") or {}
             generation += metrics.get("generation_tokens") or 0.0
@@ -439,6 +484,13 @@ def derive_sample(nodes, previous):
                 accepted = (accepted or 0.0) + metrics["accepted_tokens"]
             if metrics.get("draft_tokens") is not None:
                 draft = (draft or 0.0) + metrics["draft_tokens"]
+            if metrics.get("ttft_count") and metrics.get("ttft_avg_s") is not None:
+                ttft_count += metrics["ttft_count"]
+                ttft_sum += metrics["ttft_count"] * metrics["ttft_avg_s"]
+            if metrics.get("ttft_p50_s") is not None:
+                ttft_p50 = max(ttft_p50 or 0.0, metrics["ttft_p50_s"])
+            if metrics.get("ttft_p95_s") is not None:
+                ttft_p95 = max(ttft_p95 or 0.0, metrics["ttft_p95_s"])
         prev = previous.get("nodes", {}).get(node_id, {}) if previous else {}
         elapsed = max((sample["t"] - previous.get("t", sample["t"])) / 1000.0, 1.0) if previous else None
         gen_tps = None
@@ -518,6 +570,9 @@ def derive_sample(nodes, previous):
             "acceptance_rate": accepted / draft if draft else None,
             "request_errors": errors,
             "error_rate": err_rate,
+            "ttft_avg_s": ttft_sum / ttft_count if ttft_count else None,
+            "ttft_p50_s": ttft_p50,
+            "ttft_p95_s": ttft_p95,
         }
     return sample
 
@@ -572,6 +627,7 @@ INDEX_HTML = r"""<!doctype html>
     .summary-head strong { margin-top: 4px; }
     .tile-grid { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
     .tile { border: 1px solid rgba(255,255,255,.08); border-radius: 7px; padding: 10px; background: rgba(255,255,255,.025); min-width:0; }
+    .tile[title], .metric-tip[title] { cursor: help; }
     .tile span { display:block; color: var(--muted); font-size: 12px; }
     .tile b { display:block; font-size: 18px; margin-top: 4px; font-weight: 650; overflow-wrap:anywhere; }
     .tile small { display:block; color: var(--muted); margin-top: 4px; line-height: 1.35; }
@@ -610,23 +666,24 @@ INDEX_HTML = r"""<!doctype html>
     <section class="cards" id="cards"></section>
     <section class="grid" id="nodes"></section>
     <section class="grid">
-      <div class="panel"><h2>Generation TPS - 6h</h2><svg class="chart" id="throughput"></svg></div>
-      <div class="panel"><h2>Prompt TPS - 6h</h2><svg class="chart" id="prompt-throughput"></svg></div>
-      <div class="panel"><h2>Total Token TPS - 6h</h2><svg class="chart" id="total-throughput"></svg></div>
-      <div class="panel"><h2>KV Cache - 6h</h2><svg class="chart" id="kv"></svg></div>
-      <div class="panel"><h2>GPU Temperature - 6h</h2><svg class="chart" id="gpu-temp"></svg></div>
-      <div class="panel"><h2>GPU Power - 6h</h2><svg class="chart" id="gpu-power"></svg></div>
-      <div class="panel"><h2>GPU Temp / Power / Util - 6h</h2><svg class="chart large" id="gpu-combined"></svg></div>
-      <div class="panel"><h2>CPU Busy - 6h</h2><svg class="chart" id="cpu"></svg></div>
-      <div class="panel"><h2>IOwait - 6h</h2><svg class="chart" id="iowait"></svg></div>
-      <div class="panel"><h2>DFlash Acceptance - 6h</h2><svg class="chart" id="acceptance"></svg></div>
-      <div class="panel"><h2>Error Rate - 6h</h2><svg class="chart" id="errors"></svg></div>
-      <div class="panel"><h2>vLLM Read Bytes/s - 6h</h2><svg class="chart" id="vllm-read"></svg></div>
-      <div class="panel"><h2>vLLM Write Bytes/s - 6h</h2><svg class="chart" id="vllm-write"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="Output-token generation rate over the retained history window.">Generation TPS - 6h</h2><svg class="chart" id="throughput"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="Prompt/input token processing rate over the retained history window.">Prompt TPS - 6h</h2><svg class="chart" id="prompt-throughput"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="Combined prompt plus generation token throughput.">Total Token TPS - 6h</h2><svg class="chart" id="total-throughput"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="vLLM KV cache occupancy percentage. High values can increase queueing or preemptions.">KV Cache - 6h</h2><svg class="chart" id="kv"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="GPU core temperature in Celsius from nvidia-smi.">GPU Temperature - 6h</h2><svg class="chart" id="gpu-temp"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="GPU power draw in watts from nvidia-smi.">GPU Power - 6h</h2><svg class="chart" id="gpu-power"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="Combined chart with temperature, power and GPU utilization; dashed line is the peer node.">GPU Temp / Power / Util - 6h</h2><svg class="chart large" id="gpu-combined"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="CPU non-idle time calculated from /proc/stat deltas.">CPU Busy - 6h</h2><svg class="chart" id="cpu"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="CPU time waiting on disk or device I/O from /proc/stat deltas.">IOwait - 6h</h2><svg class="chart" id="iowait"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="Speculative decoding acceptance ratio from vLLM draft and accepted token counters, when exported.">DFlash Acceptance - 6h</h2><svg class="chart" id="acceptance"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="vLLM request error rate calculated from request_success_total with finished_reason=error.">Error Rate - 6h</h2><svg class="chart" id="errors"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="Estimated vLLM read bandwidth per second derived from vLLM counters.">vLLM Read Bytes/s - 6h</h2><svg class="chart" id="vllm-read"></svg></div>
+      <div class="panel"><h2 class="metric-tip" title="Estimated vLLM write bandwidth per second derived from vLLM counters.">vLLM Write Bytes/s - 6h</h2><svg class="chart" id="vllm-write"></svg></div>
     </section>
   </main>
   <script>
     const fmt = (v, d=1) => v === null || v === undefined || Number.isNaN(v) ? "n/a" : Number(v).toFixed(d);
+    const ms = v => v === null || v === undefined || Number.isNaN(v) ? "n/a" : `${(Number(v) * 1000).toFixed(0)} ms`;
     const pct = v => v === null || v === undefined ? "n/a" : `${(v * 100).toFixed(1)}%`;
     const bytes = v => {
       if (v === null || v === undefined || Number.isNaN(v)) return "n/a";
@@ -636,6 +693,7 @@ INDEX_HTML = r"""<!doctype html>
       return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
     };
     function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    function tip(s) { return ` title="${esc(s)}"`; }
     function clamp(v, min=0, max=100) {
       v = Number(v);
       if (Number.isNaN(v)) return 0;
@@ -765,14 +823,14 @@ INDEX_HTML = r"""<!doctype html>
       }, {generation:0, prompt:0, total:0, power:0, issues:0});
       cardRows.push(`<article class="card cluster">
         <div>
-          <span class="muted">Cluster weather</span>
+          <span class="muted metric-tip"${tip("Overall status derived from node health plus vLLM and proxy backend health.")}>Cluster weather</span>
           <strong class="${allNodesOk ? "ok" : "warn"}">${allNodesOk ? "Clear" : "Watch"}</strong>
           <div class="muted">${nodes.length} nodes | ${unhealthyBackends} backend issues</div>
         </div>
-        <div class="tile"><span>Total TPS</span><b>${fmt(totals.total)}</b><small>gen ${fmt(totals.generation)} | prompt ${fmt(totals.prompt)}</small></div>
-        <div class="tile"><span>GPU Power</span><b>${fmt(totals.power,1)}W</b><small>combined current draw</small></div>
-        <div class="tile"><span>Backends</span><b>${expectedBackends.length - unhealthyBackends}/${expectedBackends.length}</b><small>vLLM + proxy online</small></div>
-        <div class="tile"><span>History</span><b>${fmt((data.history || []).length,0)}</b><small>${fmt((data.history || []).length * (data.interval_seconds || 0) / 60,0)} min sampled</small></div>
+        <div class="tile"${tip("Total token throughput across nodes. Generation is output tokens/sec; prompt is prefill/input tokens/sec.")}><span>Total TPS</span><b>${fmt(totals.total)}</b><small>gen ${fmt(totals.generation)} | prompt ${fmt(totals.prompt)}</small></div>
+        <div class="tile"${tip("Current combined GPU power draw reported by nvidia-smi across monitored nodes.")}><span>GPU Power</span><b>${fmt(totals.power,1)}W</b><small>combined current draw</small></div>
+        <div class="tile"${tip("Number of vLLM and proxy endpoints currently reachable and responding.")}><span>Backends</span><b>${expectedBackends.length - unhealthyBackends}/${expectedBackends.length}</b><small>vLLM + proxy online</small></div>
+        <div class="tile"${tip("Number of retained samples. Retention is controlled by SPARK_DASHBOARD_HISTORY.")}><span>History</span><b>${fmt((data.history || []).length,0)}</b><small>${fmt((data.history || []).length * (data.interval_seconds || 0) / 60,0)} min sampled</small></div>
       </article>`);
       for (const n of nodes) {
         const h = latest.nodes[n.id] || {};
@@ -789,14 +847,15 @@ INDEX_HTML = r"""<!doctype html>
             <div class="status ${backendOk === nodeBackends.length ? "ok" : "warn"}">${backendOk}/${nodeBackends.length} backends</div>
           </div>
           <div class="tile-grid">
-            <div class="tile"><span>Tokens</span><b>${fmt(h.generation_tps)} gen/s</b><small>prompt ${fmt(h.prompt_tps)} | total ${fmt(h.total_tps)}</small></div>
-            <div class="tile"><span>GPU Util</span><b>${fmt(h.gpu_util_pct,0)}%</b><small>${fmt(h.gpu_temp_c,0)}C / ${fmt(h.gpu_power_w,1)}W</small>${gpuDiagram(h)}</div>
-            <div class="tile"><span>CPU</span><b>${pct(h.cpu_busy)}</b><small>iowait ${pct(h.cpu_iowait)} | mem ${pct(h.memory_pressure)}</small></div>
-            <div class="tile"><span>vLLM</span><b>KV ${pct(h.kv_cache_usage)}</b><small>run ${fmt(h.requests_running,0)} | wait ${fmt(h.requests_waiting,0)} | prefix ${pct(h.prefix_hit_rate)}</small></div>
-            <div class="tile"><span>Host I/O</span><b>${bytes((h.disk_read_bps || 0) + (h.disk_write_bps || 0))}/s</b><small>R ${bytes(h.disk_read_bps)}/s | W ${bytes(h.disk_write_bps)}/s</small></div>
-            <div class="tile"><span>Network</span><b>${bytes((h.net_rx_bps || 0) + (h.net_tx_bps || 0))}/s</b><small>RX ${bytes(h.net_rx_bps)}/s | TX ${bytes(h.net_tx_bps)}/s</small></div>
-            <div class="tile span-2"><span>Addresses</span><b>${esc(primaryIps || "no-ip")}</b><small>${ifaceWithIp.length} interfaces with addresses</small></div>
-            <div class="tile"><span>Total tokens</span><b>${fmt(h.total_tokens,0)}</b><small>prompt ${fmt(h.prompt_tokens,0)} | gen ${fmt(h.generation_tokens,0)}</small></div>
+            <div class="tile"${tip("Output-token generation speed, with prompt/input token prefill speed and combined token throughput.")}><span>Tokens</span><b>${fmt(h.generation_tps)} gen/s</b><small>prompt ${fmt(h.prompt_tps)} | total ${fmt(h.total_tps)}</small></div>
+            <div class="tile"${tip("TTFT is time to first token from vLLM's Prometheus histogram. Main value is p95 latency; smaller is better.")}><span>TTFT p95</span><b>${ms(h.ttft_p95_s)}</b><small>p50 ${ms(h.ttft_p50_s)} | avg ${ms(h.ttft_avg_s)}</small></div>
+            <div class="tile"${tip("GPU utilization percentage, with current GPU temperature in Celsius and power draw in watts.")}><span>GPU Util</span><b>${fmt(h.gpu_util_pct,0)}%</b><small>${fmt(h.gpu_temp_c,0)}C / ${fmt(h.gpu_power_w,1)}W</small>${gpuDiagram(h)}</div>
+            <div class="tile"${tip("CPU busy percentage from /proc/stat. IOwait is time waiting on disk or device I/O; memory is used pressure from MemAvailable.")}><span>CPU</span><b>${pct(h.cpu_busy)}</b><small>iowait ${pct(h.cpu_iowait)} | mem ${pct(h.memory_pressure)}</small></div>
+            <div class="tile"${tip("vLLM runtime pressure. KV is cache occupancy; run/wait are active and queued requests; prefix is prefix-cache hit rate.")}><span>vLLM</span><b>KV ${pct(h.kv_cache_usage)}</b><small>run ${fmt(h.requests_running,0)} | wait ${fmt(h.requests_waiting,0)} | prefix ${pct(h.prefix_hit_rate)}</small></div>
+            <div class="tile"${tip("Host disk read plus write throughput, derived from /proc/diskstats deltas.")}><span>Host I/O</span><b>${bytes((h.disk_read_bps || 0) + (h.disk_write_bps || 0))}/s</b><small>R ${bytes(h.disk_read_bps)}/s | W ${bytes(h.disk_write_bps)}/s</small></div>
+            <div class="tile"${tip("Aggregate network receive plus transmit throughput across interfaces, derived from /proc/net/dev deltas.")}><span>Network</span><b>${bytes((h.net_rx_bps || 0) + (h.net_tx_bps || 0))}/s</b><small>RX ${bytes(h.net_rx_bps)}/s | TX ${bytes(h.net_tx_bps)}/s</small></div>
+            <div class="tile span-2"${tip("Detected non-loopback interface addresses, useful for checking Wi-Fi, IB/bond, and service routing.")}><span>Addresses</span><b>${esc(primaryIps || "no-ip")}</b><small>${ifaceWithIp.length} interfaces with addresses</small></div>
+            <div class="tile"${tip("Lifetime token counters exported by vLLM since the server started.")}><span>Total tokens</span><b>${fmt(h.total_tokens,0)}</b><small>prompt ${fmt(h.prompt_tokens,0)} | gen ${fmt(h.generation_tokens,0)}</small></div>
           </div>
         </article>`);
       }
@@ -818,6 +877,7 @@ INDEX_HTML = r"""<!doctype html>
             <div class="small">model ${esc(model.id || "n/a")} ctx ${fmt(model.max_model_len,0)}</div>
             <div class="small">gen ${fmt(m.generation_tokens,0)} prompt ${fmt(m.prompt_tokens,0)} total ${fmt(m.total_tokens,0)}</div>
             <div class="small">running ${fmt(m.requests_running,0)} waiting ${fmt(m.requests_waiting,0)} KV ${pct(m.kv_cache_usage)} prefix ${pct(m.prefix_hit_rate)}</div>
+            <div class="small">TTFT p95 ${ms(m.ttft_p95_s)} p50 ${ms(m.ttft_p50_s)} avg ${ms(m.ttft_avg_s)}</div>
             <div class="small">success ${fmt(m.request_success,0)} errors ${fmt(m.request_errors,0)} preemptions ${fmt(m.preemptions,0)}</div>
           </div>`;
         }).join("");
@@ -828,15 +888,15 @@ INDEX_HTML = r"""<!doctype html>
         for (const p of n.proxy || []) if (!p.ok) errors.push(`proxy ${p.base_url}: ${p.error}`);
         return `<article class="panel">
           <div class="node-head"><h2>${esc(n.label)}</h2><span class="status ${n.ok ? "ok" : "bad"}">${n.ok ? "healthy/degraded-safe" : "degraded"}</span></div>
-          <div class="row"><span class="muted">Host</span><span class="mono">${esc(n.host)}</span></div>
-          <div class="row"><span class="muted">Memory pressure</span><span>${pct(memUsed)}</span></div>
-          <div class="row"><span class="muted">CPU / IOwait</span><span>busy ${pct((latest.nodes[n.id] || {}).cpu_busy)} | iowait ${pct((latest.nodes[n.id] || {}).cpu_iowait)}</span></div>
-          <div class="row"><span class="muted">GPU</span><span>${esc(hw.value?.gpu?.name || "n/a")} | ${fmt(hw.value?.gpu?.utilization_pct,0)}% | ${fmt(hw.value?.gpu?.temperature_c,0)}C | ${fmt(hw.value?.gpu?.power_w,1)}W</span></div>
-          <div class="row"><span class="muted">Load</span><span class="mono">${esc(hw.value?.loadavg || "n/a")}</span></div>
-          <div class="row"><span class="muted">Root disk</span><span>${bytes(disk.used)} / ${bytes(disk.total)} used</span></div>
-          <div class="row"><span class="muted">Network interfaces</span><span>${network || "n/a"}</span></div>
-          <div class="row"><span class="muted">vLLM</span><span>${vllm || "n/a"}</span></div>
-          <div class="row"><span class="muted">Proxy</span><span>${proxy || "n/a"}</span></div>
+          <div class="row"><span class="muted metric-tip"${tip("Node hostname or address used by the dashboard for checks and collection.")}>Host</span><span class="mono">${esc(n.host)}</span></div>
+          <div class="row"><span class="muted metric-tip"${tip("Approximate used memory pressure calculated as 1 - MemAvailable / MemTotal.")}>Memory pressure</span><span>${pct(memUsed)}</span></div>
+          <div class="row"><span class="muted metric-tip"${tip("CPU busy and IOwait percentages calculated between dashboard samples from /proc/stat.")}>CPU / IOwait</span><span>busy ${pct((latest.nodes[n.id] || {}).cpu_busy)} | iowait ${pct((latest.nodes[n.id] || {}).cpu_iowait)}</span></div>
+          <div class="row"><span class="muted metric-tip"${tip("GPU name, utilization, temperature and power draw from nvidia-smi.")}>GPU</span><span>${esc(hw.value?.gpu?.name || "n/a")} | ${fmt(hw.value?.gpu?.utilization_pct,0)}% | ${fmt(hw.value?.gpu?.temperature_c,0)}C | ${fmt(hw.value?.gpu?.power_w,1)}W</span></div>
+          <div class="row"><span class="muted metric-tip"${tip("Linux 1, 5 and 15 minute load averages from /proc/loadavg.")}>Load</span><span class="mono">${esc(hw.value?.loadavg || "n/a")}</span></div>
+          <div class="row"><span class="muted metric-tip"${tip("Root filesystem capacity and used bytes from df.")}>Root disk</span><span>${bytes(disk.used)} / ${bytes(disk.total)} used</span></div>
+          <div class="row"><span class="muted metric-tip"${tip("Per-interface state, IP addresses and cumulative RX/TX counters.")}>Network interfaces</span><span>${network || "n/a"}</span></div>
+          <div class="row"><span class="muted metric-tip"${tip("vLLM endpoint health, model metadata, token counters, queues, KV cache, TTFT and errors.")}>vLLM</span><span>${vllm || "n/a"}</span></div>
+          <div class="row"><span class="muted metric-tip"${tip("Proxy endpoint health, request counters, web-search counters, 5xx/backend errors and latest source port.")}>Proxy</span><span>${proxy || "n/a"}</span></div>
           ${errors.length ? `<div class="error">${errors.map(esc).join("<br>")}</div>` : ""}
         </article>`;
       }).join("");
@@ -928,6 +988,12 @@ class Handler(BaseHTTPRequestHandler):
             "# TYPE spark_dashboard_gpu_temperature_c gauge",
             "# HELP spark_dashboard_gpu_power_w GPU power draw in watts.",
             "# TYPE spark_dashboard_gpu_power_w gauge",
+            "# HELP spark_dashboard_ttft_p95_seconds vLLM p95 time to first token in seconds.",
+            "# TYPE spark_dashboard_ttft_p95_seconds gauge",
+            "# HELP spark_dashboard_ttft_p50_seconds vLLM p50 time to first token in seconds.",
+            "# TYPE spark_dashboard_ttft_p50_seconds gauge",
+            "# HELP spark_dashboard_ttft_avg_seconds vLLM average time to first token in seconds.",
+            "# TYPE spark_dashboard_ttft_avg_seconds gauge",
         ]
         for node_id, node in (payload.get("nodes") or {}).items():
             sample = (latest.get("nodes") or {}).get(node_id, {})
@@ -946,6 +1012,9 @@ class Handler(BaseHTTPRequestHandler):
             lines.append(f"spark_dashboard_cpu_iowait{{{labels}}} {sample.get('cpu_iowait') or 0}")
             lines.append(f"spark_dashboard_gpu_temperature_c{{{labels}}} {sample.get('gpu_temp_c') or 0}")
             lines.append(f"spark_dashboard_gpu_power_w{{{labels}}} {sample.get('gpu_power_w') or 0}")
+            lines.append(f"spark_dashboard_ttft_p95_seconds{{{labels}}} {sample.get('ttft_p95_s') or 0}")
+            lines.append(f"spark_dashboard_ttft_p50_seconds{{{labels}}} {sample.get('ttft_p50_s') or 0}")
+            lines.append(f"spark_dashboard_ttft_avg_seconds{{{labels}}} {sample.get('ttft_avg_s') or 0}")
         return "\n".join(lines) + "\n"
 
     def do_GET(self):
