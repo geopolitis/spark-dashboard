@@ -261,6 +261,9 @@ def parse_vllm_metrics(text):
     request_success = parse_sum(text, r'^vllm:request_success_total\{[^}]*\}\s+([0-9.eE+-]+)')
     prefix_hits = parse_sum(text, r'^vllm:prefix_cache_hits_total\{[^}]*\}\s+([0-9.eE+-]+)')
     prefix_queries = parse_sum(text, r'^vllm:prefix_cache_queries_total\{[^}]*\}\s+([0-9.eE+-]+)')
+    prefill_compute = parse_sum(text, r'^vllm:prompt_tokens_by_source_total\{[^}]*source="local_compute"[^}]*\}\s+([0-9.eE+-]+)')
+    prefill_cache_hit = parse_sum(text, r'^vllm:prompt_tokens_by_source_total\{[^}]*source="local_cache_hit"[^}]*\}\s+([0-9.eE+-]+)')
+    prefill_external_kv = parse_sum(text, r'^vllm:prompt_tokens_by_source_total\{[^}]*source="external_kv_transfer"[^}]*\}\s+([0-9.eE+-]+)')
     preemptions = parse_sum(text, r'^vllm:num_preemptions_total\{[^}]*\}\s+([0-9.eE+-]+)')
     read_bytes = parse_sum(text, r'^vllm:estimated_read_bytes_per_gpu_total\{[^}]*\}\s+([0-9.eE+-]+)')
     write_bytes = parse_sum(text, r'^vllm:estimated_write_bytes_per_gpu_total\{[^}]*\}\s+([0-9.eE+-]+)')
@@ -286,6 +289,9 @@ def parse_vllm_metrics(text):
         "prefix_cache_hits": prefix_hits,
         "prefix_cache_queries": prefix_queries,
         "prefix_hit_rate": prefix_hit_rate,
+        "prefill_compute_tokens": prefill_compute,
+        "prefill_cache_hit_tokens": prefill_cache_hit,
+        "prefill_external_kv_tokens": prefill_external_kv,
         "preemptions": preemptions,
         "estimated_read_bytes": read_bytes,
         "estimated_write_bytes": write_bytes,
@@ -568,6 +574,9 @@ def derive_sample(nodes, previous):
         request_success = 0.0
         prefix_hits = 0.0
         prefix_queries = 0.0
+        prefill_compute = 0.0
+        prefill_cache_hit = 0.0
+        prefill_external_kv = 0.0
         preemptions = 0.0
         estimated_read_bytes = 0.0
         estimated_write_bytes = 0.0
@@ -589,6 +598,9 @@ def derive_sample(nodes, previous):
             request_success += metrics.get("request_success") or 0.0
             prefix_hits += metrics.get("prefix_cache_hits") or 0.0
             prefix_queries += metrics.get("prefix_cache_queries") or 0.0
+            prefill_compute += metrics.get("prefill_compute_tokens") or 0.0
+            prefill_cache_hit += metrics.get("prefill_cache_hit_tokens") or 0.0
+            prefill_external_kv += metrics.get("prefill_external_kv_tokens") or 0.0
             preemptions += metrics.get("preemptions") or 0.0
             estimated_read_bytes += metrics.get("estimated_read_bytes") or 0.0
             estimated_write_bytes += metrics.get("estimated_write_bytes") or 0.0
@@ -624,6 +636,9 @@ def derive_sample(nodes, previous):
         net_tx_bps = None
         vllm_read_bps = None
         vllm_write_bps = None
+        prefill_compute_tps = None
+        prefill_cache_hit_tps = None
+        prefill_external_kv_tps = None
         flops_per_sec = None
         if elapsed and prev:
             gen_tps = max((generation - prev.get("generation_tokens", generation)) / elapsed, 0.0)
@@ -642,6 +657,9 @@ def derive_sample(nodes, previous):
             net_tx_bps = max((net_tx - prev.get("net_tx_bytes", net_tx)) / elapsed, 0.0)
             vllm_read_bps = max((estimated_read_bytes - prev.get("estimated_read_bytes", estimated_read_bytes)) / elapsed, 0.0)
             vllm_write_bps = max((estimated_write_bytes - prev.get("estimated_write_bytes", estimated_write_bytes)) / elapsed, 0.0)
+            prefill_compute_tps = max((prefill_compute - prev.get("prefill_compute_tokens", prefill_compute)) / elapsed, 0.0)
+            prefill_cache_hit_tps = max((prefill_cache_hit - prev.get("prefill_cache_hit_tokens", prefill_cache_hit)) / elapsed, 0.0)
+            prefill_external_kv_tps = max((prefill_external_kv - prev.get("prefill_external_kv_tokens", prefill_external_kv)) / elapsed, 0.0)
             flops_per_sec = max((estimated_flops - prev.get("estimated_flops", estimated_flops)) / elapsed, 0.0)
         sample["nodes"][node_id] = {
             "ok": node.get("ok", False),
@@ -670,6 +688,12 @@ def derive_sample(nodes, previous):
             "prefix_cache_hits": prefix_hits,
             "prefix_cache_queries": prefix_queries,
             "prefix_hit_rate": prefix_hits / prefix_queries if prefix_queries else None,
+            "prefill_compute_tokens": prefill_compute,
+            "prefill_cache_hit_tokens": prefill_cache_hit,
+            "prefill_external_kv_tokens": prefill_external_kv,
+            "prefill_compute_tps": prefill_compute_tps,
+            "prefill_cache_hit_tps": prefill_cache_hit_tps,
+            "prefill_external_kv_tps": prefill_external_kv_tps,
             "preemptions": preemptions,
             "estimated_read_bytes": estimated_read_bytes,
             "estimated_write_bytes": estimated_write_bytes,
@@ -843,7 +867,7 @@ INDEX_HTML = r"""<!doctype html>
       <div class="panel"><h2 class="metric-tip" data-tip="CPU time waiting on disk or device I/O from /proc/stat deltas.">IOwait - 24h</h2><svg class="chart" id="iowait"></svg></div>
       <div class="panel"><h2 class="metric-tip" data-tip="Speculative decoding acceptance ratio from vLLM draft and accepted token counters, when exported.">DFlash Acceptance - 24h</h2><svg class="chart" id="acceptance"></svg></div>
       <div class="panel"><h2 class="metric-tip" data-tip="vLLM request error rate calculated from request_success_total with finished_reason=error.">Error Rate - 24h</h2><svg class="chart" id="errors"></svg></div>
-      <div class="panel"><h2 class="metric-tip" data-tip="Combined vLLM read and write bandwidth per second. Left axis is read bytes/s; right axis is write bytes/s; bottom axis is time.">vLLM Read / Write Bytes/s - 24h</h2><svg class="chart large" id="vllm-bandwidth"></svg></div>
+      <div class="panel"><h2 class="metric-tip" data-tip="The vLLM estimated read/write byte counters are zero on this build, so this chart uses populated vLLM counters: local prefill compute tokens/s on the left axis and prefix-cache hit tokens/s on the right axis.">vLLM Prefill Compute / Cache Tokens/s - 24h</h2><svg class="chart large" id="vllm-prefill-source"></svg></div>
     </section>
   </main>
   <script>
@@ -982,7 +1006,7 @@ INDEX_HTML = r"""<!doctype html>
       `;
       svg.innerHTML = html;
     }
-    function renderVllmBandwidthChart(id, history, nodeDefs) {
+    function renderVllmPrefillSourceChart(id, history, nodeDefs) {
       const svg = document.getElementById(id);
       if (!svg) return;
       history = Array.isArray(history) ? history : [];
@@ -995,22 +1019,22 @@ INDEX_HTML = r"""<!doctype html>
         dash: idx === 0 ? "" : "5 4",
         alpha: idx === 0 ? 1 : .95,
       }));
-      const readColor = "#60a5fa";
-      const writeColor = "#fbbf24";
-      const readValues = [];
-      const writeValues = [];
+      const computeColor = "#60a5fa";
+      const cacheColor = "#fbbf24";
+      const computeValues = [];
+      const cacheValues = [];
       for (const h of history) {
         for (const node of nodes) {
           const sample = h.nodes?.[node.id] || {};
-          if (sample.vllm_read_bps !== null && sample.vllm_read_bps !== undefined) readValues.push(sample.vllm_read_bps);
-          if (sample.vllm_write_bps !== null && sample.vllm_write_bps !== undefined) writeValues.push(sample.vllm_write_bps);
+          if (sample.prefill_compute_tps !== null && sample.prefill_compute_tps !== undefined) computeValues.push(sample.prefill_compute_tps);
+          if (sample.prefill_cache_hit_tps !== null && sample.prefill_cache_hit_tps !== undefined) cacheValues.push(sample.prefill_cache_hit_tps);
         }
       }
-      const maxRead = Math.max(...readValues, 1);
-      const maxWrite = Math.max(...writeValues, 1);
+      const maxCompute = Math.max(...computeValues, 1);
+      const maxCache = Math.max(...cacheValues, 1);
       const x = t => L + ((t - minT) / Math.max(maxT - minT, 1)) * (W - L - R);
-      const yRead = v => H - B - (Number(v || 0) / maxRead) * (H - T - B);
-      const yWrite = v => H - B - (Number(v || 0) / maxWrite) * (H - T - B);
+      const yCompute = v => H - B - (Number(v || 0) / maxCompute) * (H - T - B);
+      const yCache = v => H - B - (Number(v || 0) / maxCache) * (H - T - B);
       const pathFor = (node, metric, yFn) => {
         const pts = history.map(h => ({t:h.t, v:h.nodes?.[node]?.[metric]})).filter(p => p.v !== null && p.v !== undefined);
         return pts.map((p,i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)},${yFn(p.v).toFixed(1)}`).join(" ");
@@ -1022,25 +1046,25 @@ INDEX_HTML = r"""<!doctype html>
       `;
       for (let i=0; i<=4; i++) {
         const yy = T + (i / 4) * (H - T - B);
-        const readVal = maxRead * (4 - i) / 4;
-        const writeVal = maxWrite * (4 - i) / 4;
+        const computeVal = maxCompute * (4 - i) / 4;
+        const cacheVal = maxCache * (4 - i) / 4;
         html += `<line x1="${L}" y1="${yy}" x2="${W-R}" y2="${yy}" stroke="#172232"/>`;
-        html += `<text x="4" y="${yy+3}" fill="${readColor}">${bytes(readVal)}/s</text>`;
-        html += `<text x="${W-R+6}" y="${yy+3}" fill="${writeColor}">${bytes(writeVal)}/s</text>`;
+        html += `<text x="4" y="${yy+3}" fill="${computeColor}">${fmt(computeVal, 0)}/s</text>`;
+        html += `<text x="${W-R+6}" y="${yy+3}" fill="${cacheColor}">${fmt(cacheVal, 0)}/s</text>`;
       }
       html += `
         <text x="${L}" y="${H-12}">${new Date(minT).toLocaleTimeString()}</text>
         <text x="${W-R-72}" y="${H-12}">${new Date(maxT).toLocaleTimeString()}</text>
       `;
       for (const node of nodes) {
-        const readPath = pathFor(node.id, "vllm_read_bps", yRead);
-        const writePath = pathFor(node.id, "vllm_write_bps", yWrite);
-        if (readPath) html += `<path d="${readPath}" fill="none" stroke="${readColor}" stroke-width="2" stroke-dasharray="${node.dash}" opacity="${node.alpha}"/>`;
-        if (writePath) html += `<path d="${writePath}" fill="none" stroke="${writeColor}" stroke-width="2" stroke-dasharray="${node.dash}" opacity="${node.alpha}"/>`;
+        const computePath = pathFor(node.id, "prefill_compute_tps", yCompute);
+        const cachePath = pathFor(node.id, "prefill_cache_hit_tps", yCache);
+        if (computePath) html += `<path d="${computePath}" fill="none" stroke="${computeColor}" stroke-width="2" stroke-dasharray="${node.dash}" opacity="${node.alpha}"/>`;
+        if (cachePath) html += `<path d="${cachePath}" fill="none" stroke="${cacheColor}" stroke-width="2" stroke-dasharray="${node.dash}" opacity="${node.alpha}"/>`;
       }
       html += `
-        <text x="${L+6}" y="${T+14}" fill="${readColor}">read B/s</text>
-        <text x="${L+78}" y="${T+14}" fill="${writeColor}">write B/s</text>
+        <text x="${L+6}" y="${T+14}" fill="${computeColor}">compute tok/s</text>
+        <text x="${L+106}" y="${T+14}" fill="${cacheColor}">cache-hit tok/s</text>
         <text x="${W-R-138}" y="${T+14}">solid ${esc(nodes[0]?.label || "node 1")}</text>
         <text x="${W-R-138}" y="${T+30}">dashed ${esc(nodes[1]?.label || "node 2")}</text>
       `;
@@ -1165,7 +1189,7 @@ INDEX_HTML = r"""<!doctype html>
       renderChart("iowait", data.history, "cpu_iowait", 1, nodeDefs);
       renderChart("acceptance", data.history, "acceptance_rate", 1, nodeDefs);
       renderChart("errors", data.history, "error_rate", 1, nodeDefs);
-      renderVllmBandwidthChart("vllm-bandwidth", data.history, nodeDefs);
+      renderVllmPrefillSourceChart("vllm-prefill-source", data.history, nodeDefs);
     }
     async function refresh() {
       try {
