@@ -14,54 +14,36 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PORT = int(os.environ.get("SPARK_DASHBOARD_PORT", "8090"))
 INTERVAL_SECONDS = int(os.environ.get("SPARK_DASHBOARD_INTERVAL", "15"))
 HISTORY_SECONDS = int(os.environ.get("SPARK_DASHBOARD_HISTORY", str(6 * 60 * 60)))
-TOULA_VLLM_URL = os.environ.get("TOULA_VLLM_URL", "http://127.0.0.1:8080")
-TOULA_PROXY_URL = os.environ.get("TOULA_PROXY_URL", "http://127.0.0.1:8081")
-TOULA_REMOTE_VLLM_URL = os.environ.get("TOULA_REMOTE_VLLM_URL", "http://10.10.10.1:8080")
-TOULA_REMOTE_PROXY_URL = os.environ.get("TOULA_REMOTE_PROXY_URL", "http://10.10.10.1:8081")
-KOULA_VLLM_URL = os.environ.get("KOULA_VLLM_URL", "http://127.0.0.1:8080")
-KOULA_PROXY_URL = os.environ.get("KOULA_PROXY_URL", "http://127.0.0.1:8081")
-KOULA_REMOTE_VLLM_URL = os.environ.get("KOULA_REMOTE_VLLM_URL", "http://10.10.10.2:8080")
-KOULA_REMOTE_PROXY_URL = os.environ.get("KOULA_REMOTE_PROXY_URL", "http://10.10.10.2:8081")
-TOULA_REMOTE_HOST = os.environ.get("TOULA_REMOTE_HOST", "10.10.10.1")
-KOULA_REMOTE_HOST = os.environ.get("KOULA_REMOTE_HOST", "10.10.10.2")
+LOCAL_NODE_ID = os.environ.get("LOCAL_NODE_ID", "local")
+LOCAL_NODE_LABEL = os.environ.get("LOCAL_NODE_LABEL", "Local node")
+LOCAL_NODE_HOST = os.environ.get("LOCAL_NODE_HOST", "127.0.0.1")
+LOCAL_NODE_SSH = os.environ.get("LOCAL_NODE_SSH", "")
+LOCAL_VLLM_URL = os.environ.get("LOCAL_VLLM_URL", "http://127.0.0.1:8080")
+LOCAL_PROXY_URL = os.environ.get("LOCAL_PROXY_URL", "http://127.0.0.1:8081")
+REMOTE_NODE_ID = os.environ.get("REMOTE_NODE_ID", "remote")
+REMOTE_NODE_LABEL = os.environ.get("REMOTE_NODE_LABEL", "Remote node")
+REMOTE_NODE_HOST = os.environ.get("REMOTE_NODE_HOST", "remote-host")
+REMOTE_NODE_SSH = os.environ.get("REMOTE_NODE_SSH", REMOTE_NODE_HOST)
+REMOTE_VLLM_URL = os.environ.get("REMOTE_VLLM_URL", f"http://{REMOTE_NODE_HOST}:8080")
+REMOTE_PROXY_URL = os.environ.get("REMOTE_PROXY_URL", f"http://{REMOTE_NODE_HOST}:8081")
 
 def build_nodes():
-    hostname = socket.gethostname().split(".")[0].lower()
-    if hostname == "toula":
-        return [
-            {
-                "id": "toula",
-                "label": "Toula",
-                "host": "127.0.0.1",
-                "ssh": None,
-                "vllm": [TOULA_VLLM_URL],
-                "proxy": [TOULA_PROXY_URL],
-            },
-            {
-                "id": "koula",
-                "label": "Koula",
-                "host": KOULA_REMOTE_HOST,
-                "ssh": KOULA_REMOTE_HOST,
-                "vllm": [KOULA_REMOTE_VLLM_URL],
-                "proxy": [KOULA_REMOTE_PROXY_URL],
-            },
-        ]
     return [
         {
-            "id": "koula",
-            "label": "Koula",
-            "host": "127.0.0.1",
-            "ssh": None,
-            "vllm": [KOULA_VLLM_URL],
-            "proxy": [KOULA_PROXY_URL],
+            "id": LOCAL_NODE_ID,
+            "label": LOCAL_NODE_LABEL,
+            "host": LOCAL_NODE_HOST,
+            "ssh": LOCAL_NODE_SSH or None,
+            "vllm": [LOCAL_VLLM_URL],
+            "proxy": [LOCAL_PROXY_URL],
         },
         {
-            "id": "toula",
-            "label": "Toula",
-            "host": TOULA_REMOTE_HOST,
-            "ssh": TOULA_REMOTE_HOST,
-            "vllm": [TOULA_REMOTE_VLLM_URL],
-            "proxy": [TOULA_REMOTE_PROXY_URL],
+            "id": REMOTE_NODE_ID,
+            "label": REMOTE_NODE_LABEL,
+            "host": REMOTE_NODE_HOST,
+            "ssh": REMOTE_NODE_SSH or None,
+            "vllm": [REMOTE_VLLM_URL],
+            "proxy": [REMOTE_PROXY_URL],
         },
     ]
 
@@ -649,15 +631,17 @@ INDEX_HTML = r"""<!doctype html>
       for (const v of node.vllm || []) if (v.metrics && v.metrics[key] !== null && v.metrics[key] !== undefined) return v.metrics[key];
       return null;
     }
-    function renderChart(id, history, metric, maxHint) {
+    function renderChart(id, history, metric, maxHint, nodeDefs) {
       const svg = document.getElementById(id);
       history = Array.isArray(history) ? history : [];
       const W = 640, H = 180, L = 44, R = 12, T = 12, B = 28;
       svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-      const series = ["koula", "toula"].map(node => ({
-        node,
-        color: node === "koula" ? "#60a5fa" : "#36d399",
-        points: history.map(h => ({ t:h.t, v:h.nodes[node] ? h.nodes[node][metric] : null })).filter(p => p.v !== null && p.v !== undefined)
+      const palette = ["#36d399", "#60a5fa", "#fbbf24", "#fb7185"];
+      const series = (nodeDefs || []).map((node, idx) => ({
+        node: node.id,
+        label: node.label || node.id,
+        color: palette[idx % palette.length],
+        points: history.map(h => ({ t:h.t, v:h.nodes[node.id] ? h.nodes[node.id][metric] : null })).filter(p => p.v !== null && p.v !== undefined)
       }));
       const all = series.flatMap(s => s.points);
       const minT = history[0]?.t || Date.now() - 1, maxT = history[history.length - 1]?.t || Date.now();
@@ -673,21 +657,23 @@ INDEX_HTML = r"""<!doctype html>
       for (const s of series) {
         if (!s.points.length) continue;
         const d = s.points.map((p,i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
-        html += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2"/><text x="${W-100}" y="${s.node === "koula" ? 18 : 34}" fill="${s.color}">${s.node}</text>`;
+        html += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2"/><text x="${W-110}" y="${18 + series.indexOf(s) * 16}" fill="${s.color}">${esc(s.label)}</text>`;
       }
       svg.innerHTML = html;
     }
-    function renderGpuCombinedChart(id, history) {
+    function renderGpuCombinedChart(id, history, nodeDefs) {
       const svg = document.getElementById(id);
       if (!svg) return;
       history = Array.isArray(history) ? history : [];
       const W = 760, H = 260, L = 48, R = 58, T = 20, B = 42;
       svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
       const minT = history[0]?.t || Date.now() - 1, maxT = history[history.length - 1]?.t || Date.now();
-      const nodes = [
-        {id:"toula", label:"Toula", dash:"", alpha:1},
-        {id:"koula", label:"Koula", dash:"5 4", alpha:.95},
-      ];
+      const nodes = (nodeDefs || []).map((node, idx) => ({
+        id: node.id,
+        label: node.label || node.id,
+        dash: idx === 0 ? "" : "5 4",
+        alpha: idx === 0 ? 1 : .95,
+      }));
       const colors = {temp:"#ff6b6b", power:"#e8c547", util:"#50d5ff"};
       const x = t => L + ((t - minT) / Math.max(maxT - minT, 1)) * (W - L - R);
       const yTemp = v => H - B - (clamp(v, 0, 100) / 100) * (H - T - B);
@@ -728,8 +714,8 @@ INDEX_HTML = r"""<!doctype html>
         <text x="${L+6}" y="${T+14}" fill="${colors.temp}">temp C</text>
         <text x="${L+70}" y="${T+14}" fill="${colors.power}">power W</text>
         <text x="${L+142}" y="${T+14}" fill="${colors.util}">util %</text>
-        <text x="${W-R-118}" y="${T+14}">solid Toula</text>
-        <text x="${W-R-118}" y="${T+30}">dashed Koula</text>
+        <text x="${W-R-138}" y="${T+14}">solid ${esc(nodes[0]?.label || "node 1")}</text>
+        <text x="${W-R-138}" y="${T+30}">dashed ${esc(nodes[1]?.label || "node 2")}</text>
       `;
       svg.innerHTML = html;
     }
@@ -830,19 +816,20 @@ INDEX_HTML = r"""<!doctype html>
           ${errors.length ? `<div class="error">${errors.map(esc).join("<br>")}</div>` : ""}
         </article>`;
       }).join("");
-      renderChart("throughput", data.history, "generation_tps", 1);
-      renderChart("prompt-throughput", data.history, "prompt_tps", 1);
-      renderChart("total-throughput", data.history, "total_tps", 1);
-      renderChart("kv", data.history, "kv_cache_usage", 1);
-      renderChart("gpu-temp", data.history, "gpu_temp_c", 1);
-      renderChart("gpu-power", data.history, "gpu_power_w", 1);
-      renderGpuCombinedChart("gpu-combined", data.history);
-      renderChart("cpu", data.history, "cpu_busy", 1);
-      renderChart("iowait", data.history, "cpu_iowait", 1);
-      renderChart("acceptance", data.history, "acceptance_rate", 1);
-      renderChart("errors", data.history, "error_rate", 1);
-      renderChart("vllm-read", data.history, "vllm_read_bps", 1);
-      renderChart("vllm-write", data.history, "vllm_write_bps", 1);
+      const nodeDefs = nodes.map(n => ({id: n.id, label: n.label}));
+      renderChart("throughput", data.history, "generation_tps", 1, nodeDefs);
+      renderChart("prompt-throughput", data.history, "prompt_tps", 1, nodeDefs);
+      renderChart("total-throughput", data.history, "total_tps", 1, nodeDefs);
+      renderChart("kv", data.history, "kv_cache_usage", 1, nodeDefs);
+      renderChart("gpu-temp", data.history, "gpu_temp_c", 1, nodeDefs);
+      renderChart("gpu-power", data.history, "gpu_power_w", 1, nodeDefs);
+      renderGpuCombinedChart("gpu-combined", data.history, nodeDefs);
+      renderChart("cpu", data.history, "cpu_busy", 1, nodeDefs);
+      renderChart("iowait", data.history, "cpu_iowait", 1, nodeDefs);
+      renderChart("acceptance", data.history, "acceptance_rate", 1, nodeDefs);
+      renderChart("errors", data.history, "error_rate", 1, nodeDefs);
+      renderChart("vllm-read", data.history, "vllm_read_bps", 1, nodeDefs);
+      renderChart("vllm-write", data.history, "vllm_write_bps", 1, nodeDefs);
     }
     async function refresh() {
       try {
