@@ -646,9 +646,9 @@ INDEX_HTML = r"""<!doctype html>
       const power = clamp(h.gpu_power_w, 0, 120);
       const util = clamp(h.gpu_util_pct, 0, 100);
       return `<div class="gpu-diagram" aria-label="GPU temperature, power, and utilization diagram">
+        <div class="gauge"><span>Util</span><div class="gauge-track"><i class="gauge-fill" style="--w:${util}%;--c:#50d5ff"></i></div><span>${fmt(h.gpu_util_pct,0)}%</span></div>
         <div class="gauge"><span>Temp</span><div class="gauge-track"><i class="gauge-fill" style="--w:${temp}%;--c:#ff6b6b"></i></div><span>${fmt(h.gpu_temp_c,0)}C</span></div>
         <div class="gauge"><span>Power</span><div class="gauge-track"><i class="gauge-fill" style="--w:${power / 120 * 100}%;--c:#e8c547"></i></div><span>${fmt(h.gpu_power_w,1)}W</span></div>
-        <div class="gauge"><span>Util</span><div class="gauge-track"><i class="gauge-fill" style="--w:${util}%;--c:#50d5ff"></i></div><span>${fmt(h.gpu_util_pct,0)}%</span></div>
       </div>`;
     }
     function nodeMetric(node, key) {
@@ -790,7 +790,7 @@ INDEX_HTML = r"""<!doctype html>
           </div>
           <div class="tile-grid">
             <div class="tile"><span>Tokens</span><b>${fmt(h.generation_tps)} gen/s</b><small>prompt ${fmt(h.prompt_tps)} | total ${fmt(h.total_tps)}</small></div>
-            <div class="tile"><span>GPU</span><b>${fmt(h.gpu_temp_c,0)}C / ${fmt(h.gpu_power_w,1)}W</b><small>util ${fmt(h.gpu_util_pct,0)}%</small>${gpuDiagram(h)}</div>
+            <div class="tile"><span>GPU Util</span><b>${fmt(h.gpu_util_pct,0)}%</b><small>${fmt(h.gpu_temp_c,0)}C / ${fmt(h.gpu_power_w,1)}W</small>${gpuDiagram(h)}</div>
             <div class="tile"><span>CPU</span><b>${pct(h.cpu_busy)}</b><small>iowait ${pct(h.cpu_iowait)} | mem ${pct(h.memory_pressure)}</small></div>
             <div class="tile"><span>vLLM</span><b>KV ${pct(h.kv_cache_usage)}</b><small>run ${fmt(h.requests_running,0)} | wait ${fmt(h.requests_waiting,0)} | prefix ${pct(h.prefix_hit_rate)}</small></div>
             <div class="tile"><span>Host I/O</span><b>${bytes((h.disk_read_bps || 0) + (h.disk_write_bps || 0))}/s</b><small>R ${bytes(h.disk_read_bps)}/s | W ${bytes(h.disk_write_bps)}/s</small></div>
