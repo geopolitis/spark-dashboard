@@ -326,14 +326,24 @@ def parse_vllm_metrics(text):
 def collect_vllm(node):
     results = []
     for base in node.get("vllm", []):
-        item = {"base_url": base, "models": None, "metrics": None, "ok": False, "error": None}
+        item = {"base_url": base, "version": None, "models": None, "metrics": None, "ok": False, "error": None}
+        try:
+            _, _, body = http_get(f"{base}/version", timeout=2)
+            version = json.loads(body.decode("utf-8"))
+            item["version"] = version.get("version")
+            item["ok"] = True
+        except Exception as exc:
+            item["error"] = f"version: {exc}"
         try:
             _, _, body = http_get(f"{base}/v1/models", timeout=2)
             models = json.loads(body.decode("utf-8"))
             item["models"] = models.get("data", [])
             item["ok"] = True
         except Exception as exc:
-            item["error"] = f"models: {exc}"
+            if item["error"]:
+                item["error"] += f"; models: {exc}"
+            else:
+                item["error"] = f"models: {exc}"
         try:
             _, _, body = http_get(f"{base}/metrics", timeout=2)
             item["metrics"] = parse_vllm_metrics(body.decode("utf-8", "replace"))
@@ -1373,6 +1383,7 @@ INDEX_HTML = r"""<!doctype html>
       for (const n of nodes) {
         const h = latest.nodes[n.id] || {};
         const model = firstModel(n);
+        const primaryVllm = (n.vllm || [])[0] || {};
         const runtime = (n.vllm_runtime || {}).value || {};
         const contextLen = model.max_model_len || runtime.max_model_len;
         const nodeBackends = [...(n.vllm || []), ...(n.proxy || [])];
@@ -1388,7 +1399,7 @@ INDEX_HTML = r"""<!doctype html>
             <div class="status ${backendOk === nodeBackends.length ? "ok" : "warn"}">${backendOk}/${nodeBackends.length} backends</div>
           </div>
           <div class="tile-grid">
-            <div class="tile"${tip("Currently served vLLM model and key launch parameters parsed from /v1/models and the vLLM serve process.")}><span>Model</span><b>${esc(shortModelName(model.id || runtime.served_model_name || runtime.model_path))}</b><small>ctx ${fmt(contextLen,0)} | seqs ${esc(runtime.max_num_seqs || "n/a")} | batch ${esc(runtime.max_num_batched_tokens || "n/a")}</small></div>
+            <div class="tile"${tip("Currently served model, vLLM version, and key launch parameters parsed from /version, /v1/models, and the vLLM serve process.")}><span>Model</span><b>${esc(shortModelName(model.id || runtime.served_model_name || runtime.model_path))}</b><small>vLLM ${esc(primaryVllm.version || "n/a")} | ctx ${fmt(contextLen,0)} | seqs ${esc(runtime.max_num_seqs || "n/a")} | batch ${esc(runtime.max_num_batched_tokens || "n/a")}</small></div>
             <div class="tile"${tip("Output-token generation speed, with prompt/input token prefill speed and combined token throughput.")}><span>Tokens</span><b>${fmt(h.generation_tps)} gen/s</b><small>prompt ${fmt(h.prompt_tps)} | total ${fmt(h.total_tps)}</small></div>
             <div class="tile"${tip("TTFT is time to first token from vLLM's Prometheus histogram. Main value is p95 latency; smaller is better.")}><span>TTFT p95</span><b>${ms(h.ttft_p95_s)}</b><small>p50 ${ms(h.ttft_p50_s)} | avg ${ms(h.ttft_avg_s)}</small></div>
             <div class="tile"${tip("GPU utilization percentage, with current GPU temperature in Celsius and power draw in watts.")}><span>GPU Util</span><b>${fmt(h.gpu_util_pct,0)}%</b><small>${fmt(h.gpu_temp_c,0)}C / ${fmt(h.gpu_power_w,1)}W</small>${gpuDiagram(h)}</div>
@@ -1417,7 +1428,7 @@ INDEX_HTML = r"""<!doctype html>
           const model = (v.models || [])[0] || {};
           const runtime = (n.vllm_runtime || {}).value || {};
           return `<div class="${v.ok ? "ok" : "bad"} mono">${esc(v.base_url)} ${v.ok ? "ok" : esc(v.error)}
-            <div class="small">model ${esc(model.id || "n/a")} ctx ${fmt(model.max_model_len,0)}</div>
+            <div class="small">model ${esc(model.id || "n/a")} ctx ${fmt(model.max_model_len,0)} vLLM ${esc(v.version || "n/a")}</div>
             <div class="small">root ${esc(model.root || runtime.model_path || "n/a")}</div>
             <div class="small">params gpu_mem ${esc(runtime.gpu_memory_utilization || "n/a")} seqs ${esc(runtime.max_num_seqs || "n/a")} batch ${esc(runtime.max_num_batched_tokens || "n/a")} kv ${esc(runtime.kv_cache_dtype || "n/a")}</div>
             <div class="small">cache prefix ${runtime.prefix_caching ? "on" : "n/a"} chunked_prefill ${runtime.chunked_prefill ? "on" : "n/a"} attention ${esc(runtime.attention_backend || "n/a")} moe ${esc(runtime.moe_backend || "n/a")}</div>
