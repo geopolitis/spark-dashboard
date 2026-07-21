@@ -962,7 +962,8 @@ INDEX_HTML = r"""<!doctype html>
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; overflow-wrap:anywhere; }
     .chart { width: 100%; height: 180px; border: 1px solid var(--line); border-radius: 8px; background: #0b1118; }
     .chart.large { height: 260px; }
-    .chart text { fill: var(--muted); font-size: 10px; }
+    .chart text { font-size: 10px; }
+    .chart text:not([fill]) { fill: var(--muted); }
     .chart path, .chart line { vector-effect: non-scaling-stroke; }
     .chart-category { display: grid; gap: 12px; }
     .category-head { display:flex; justify-content:space-between; gap:16px; align-items:flex-end; padding: 2px 2px 0; }
